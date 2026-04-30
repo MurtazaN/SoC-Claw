@@ -8,8 +8,10 @@ from soc_claw.utils import (
     log_routing_decision,
     log_inference,
     log_verification,
+    guided_json_kwargs,
     MODEL_NAME,
 )
+from soc_claw.schemas import VerificationDecision
 
 SYSTEM_PROMPT = """You are a senior SOC analyst performing quality assurance on alert triage decisions. You receive a raw security alert AND the Triage Agent's verdict (severity, confidence, reasoning, enrichment data).
 
@@ -105,10 +107,13 @@ async def run_verification(alert: dict, triage_result: dict, steering_context: s
 
     inference_start = time.perf_counter()
 
-    # Single call — NO tools
+    # Single call — NO tools.
+    # On the local route (vLLM), guided_json constrains the output.
+    gj = guided_json_kwargs(VerificationDecision, route)
     response = await client.chat.completions.create(
         model=MODEL_NAME,
         messages=messages,
+        **gj,
     )
 
     inference_ms = int((time.perf_counter() - inference_start) * 1000)
@@ -116,9 +121,17 @@ async def run_verification(alert: dict, triage_result: dict, steering_context: s
 
     content = response.choices[0].message.content or ""
 
+    # Try Pydantic-validated parse first, then regex fallback, then default.
+    result = None
     try:
-        result = extract_json(content)
-    except ValueError:
+        result = VerificationDecision.model_validate_json(content).model_dump()
+    except Exception:
+        try:
+            result = VerificationDecision.model_validate(extract_json(content)).model_dump()
+        except Exception:
+            pass
+
+    if result is None:
         # Retry once
         messages.append({"role": "assistant", "content": content})
         messages.append({
@@ -128,23 +141,30 @@ async def run_verification(alert: dict, triage_result: dict, steering_context: s
         response = await client.chat.completions.create(
             model=MODEL_NAME,
             messages=messages,
+            **gj,
         )
         content = response.choices[0].message.content or ""
         try:
-            result = extract_json(content)
-        except ValueError:
-            # Fail-open: treat as confirmed
-            result = {
-                "decision": "confirmed",
-                "original_severity": triage_result.get("severity", "P3"),
-                "verified_severity": triage_result.get("severity", "P3"),
-                "confidence_in_verification": 50,
-                "reasoning": "Verification failed to produce valid JSON. Defaulting to confirmed (fail-open).",
-                "issues_found": ["verifier_json_parse_failure"],
-                "checks_passed": [],
-                "checks_failed": ["json_output"],
-                "recommendation": "Manual review recommended due to verification failure.",
-            }
+            result = VerificationDecision.model_validate_json(content).model_dump()
+        except Exception:
+            try:
+                result = VerificationDecision.model_validate(extract_json(content)).model_dump()
+            except Exception:
+                pass
+
+    if result is None:
+        # Fail-open: treat as confirmed
+        result = {
+            "decision": "confirmed",
+            "original_severity": triage_result.get("severity", "P3"),
+            "verified_severity": triage_result.get("severity", "P3"),
+            "confidence_in_verification": 50,
+            "reasoning": "Verification failed to produce valid JSON. Defaulting to confirmed (fail-open).",
+            "issues_found": ["verifier_json_parse_failure"],
+            "checks_passed": [],
+            "checks_failed": ["json_output"],
+            "recommendation": "Manual review recommended due to verification failure.",
+        }
 
     # Log the verification decision
     log_verification(

@@ -8,8 +8,10 @@ from soc_claw.utils import (
     log_routing_decision,
     log_tool_call,
     log_inference,
+    guided_json_kwargs,
     MODEL_NAME,
 )
+from soc_claw.schemas import TriageVerdict
 from soc_claw.tools.ip_reputation import ip_reputation
 from soc_claw.tools.mitre_lookup import mitre_lookup
 from soc_claw.tools.asset_lookup import asset_lookup
@@ -133,10 +135,14 @@ async def run_triage(alert: dict, steering_context: str = None) -> dict:
 
     inference_start = time.perf_counter()
 
-    # Single LLM call — no tool-calling API needed
+    # Single LLM call — no tool-calling API needed.
+    # On the local route (vLLM), guided_json constrains the output at
+    # decode time so the model physically cannot emit invalid JSON.
+    gj = guided_json_kwargs(TriageVerdict, route)
     response = await client.chat.completions.create(
         model=MODEL_NAME,
         messages=messages,
+        **gj,
     )
 
     inference_ms = int((time.perf_counter() - inference_start) * 1000)
@@ -144,9 +150,17 @@ async def run_triage(alert: dict, steering_context: str = None) -> dict:
 
     content = response.choices[0].message.content or ""
 
+    # Try Pydantic-validated parse first, then regex fallback, then default.
+    verdict = None
     try:
-        verdict = extract_json(content)
-    except ValueError:
+        verdict = TriageVerdict.model_validate_json(content).model_dump()
+    except Exception:
+        try:
+            verdict = TriageVerdict.model_validate(extract_json(content)).model_dump()
+        except Exception:
+            pass
+
+    if verdict is None:
         # Retry once with a reminder
         messages.append({"role": "assistant", "content": content})
         messages.append({
@@ -156,27 +170,34 @@ async def run_triage(alert: dict, steering_context: str = None) -> dict:
         response = await client.chat.completions.create(
             model=MODEL_NAME,
             messages=messages,
+            **gj,
         )
         content = response.choices[0].message.content or ""
         try:
-            verdict = extract_json(content)
-        except ValueError:
-            # Default verdict based on enrichment data
-            severity = "P3"
-            if ip_result.get("verdict") == "malicious" and asset_result.get("criticality") in ("critical", "high"):
-                severity = "P1"
-            elif ip_result.get("verdict") == "malicious":
-                severity = "P2"
+            verdict = TriageVerdict.model_validate_json(content).model_dump()
+        except Exception:
+            try:
+                verdict = TriageVerdict.model_validate(extract_json(content)).model_dump()
+            except Exception:
+                pass
 
-            verdict = {
-                "severity": severity,
-                "confidence": 30,
-                "reasoning": "Failed to parse LLM response. Severity estimated from enrichment data.",
-                "mitre_techniques": [m.get("technique_id", "") for m in mitre_results],
-                "iocs_found": [{"indicator": alert.get("dest_ip", ""), "type": "ip", "threat_score": ip_result.get("threat_score", 0)}] if ip_result.get("threat_score", 0) > 0 else [],
-                "asset_criticality": asset_result.get("criticality", "medium"),
-                "recommended_urgency": "immediate" if severity == "P1" else "urgent" if severity == "P2" else "standard",
-            }
+    if verdict is None:
+        # Default verdict based on enrichment data
+        severity = "P3"
+        if ip_result.get("verdict") == "malicious" and asset_result.get("criticality") in ("critical", "high"):
+            severity = "P1"
+        elif ip_result.get("verdict") == "malicious":
+            severity = "P2"
+
+        verdict = {
+            "severity": severity,
+            "confidence": 30,
+            "reasoning": "Failed to parse LLM response. Severity estimated from enrichment data.",
+            "mitre_techniques": [m.get("technique_id", "") for m in mitre_results],
+            "iocs_found": [{"indicator": alert.get("dest_ip", ""), "type": "ip", "threat_score": ip_result.get("threat_score", 0)}] if ip_result.get("threat_score", 0) > 0 else [],
+            "asset_criticality": asset_result.get("criticality", "medium"),
+            "recommended_urgency": "immediate" if severity == "P1" else "urgent" if severity == "P2" else "standard",
+        }
 
     # Attach enrichment metadata
     verdict["_tool_calls"] = tool_calls_log

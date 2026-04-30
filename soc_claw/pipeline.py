@@ -26,6 +26,7 @@ Flow:
 
 import ipaddress
 import json
+import logging
 import time
 from pathlib import Path
 
@@ -34,6 +35,8 @@ from soc_claw.agents.verifier_agent import run_verification
 from soc_claw.agents.response_agent import run_response
 from soc_claw.tools import response_tools
 from soc_claw.utils import log_analyst_action
+
+logger = logging.getLogger("soc-claw.pipeline")
 
 
 def merge_verdict(triage_result: dict, verification_result: dict) -> dict:
@@ -196,10 +199,26 @@ def execute_approved_action(action: dict, alert: dict = None) -> dict:
 
 
 def load_alerts() -> list[dict]:
-    """Load all alerts from the data directory."""
+    """Load all alerts from the data directory.
+
+    Each alert is validated against the ``Alert`` schema. Invalid entries
+    are logged and skipped so a single bad record doesn't block the
+    entire pipeline.
+    """
+    from soc_claw.schemas import Alert
+
     data_path = Path(__file__).parent / "data" / "alerts.json"
     with open(data_path) as f:
-        return json.load(f)
+        raw = json.load(f)
+
+    validated: list[dict] = []
+    for i, item in enumerate(raw):
+        try:
+            alert = Alert.model_validate(item)
+            validated.append(alert.model_dump())
+        except Exception as exc:
+            logger.warning("Skipping invalid alert at index %d: %s", i, exc)
+    return validated
 
 
 def get_alert_by_id(alert_id: str) -> dict | None:

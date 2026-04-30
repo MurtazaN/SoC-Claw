@@ -12,6 +12,7 @@ dependencies = [
     "jinja2",
     "python-dotenv>=1.0",
     "pyyaml",
+    "pydantic>=2.6",
 ]
 
 # vLLM is intentionally NOT a project dependency. It is a host-only GPU

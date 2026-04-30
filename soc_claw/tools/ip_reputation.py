@@ -1,15 +1,27 @@
 import json
+import logging
 from pathlib import Path
 
 DATA_DIR = Path(__file__).parent.parent / "data"
 _cache = None
+_logger = logging.getLogger("soc-claw.tools.ip_reputation")
 
 
 def _load_threat_intel():
     global _cache
     if _cache is None:
+        from soc_claw.schemas import ThreatIntelEntry
+
         with open(DATA_DIR / "threat_intel.json") as f:
-            _cache = json.load(f)
+            raw = json.load(f)
+        validated = []
+        for i, item in enumerate(raw):
+            try:
+                entry = ThreatIntelEntry.model_validate(item)
+                validated.append(entry.model_dump())
+            except Exception as exc:
+                _logger.warning("Skipping invalid threat_intel entry at index %d: %s", i, exc)
+        _cache = validated
     return _cache
 
 

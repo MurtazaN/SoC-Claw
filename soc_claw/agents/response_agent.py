@@ -8,8 +8,10 @@ from soc_claw.utils import (
     log_routing_decision,
     log_inference,
     log_response_plan,
+    guided_json_kwargs,
     MODEL_NAME,
 )
+from soc_claw.schemas import ResponsePlan
 
 SYSTEM_PROMPT = """You are a SOC incident responder. You receive a triaged and VERIFIED security alert with a final severity score, enrichment context, and verification status. Your job is to produce a prioritized response plan with specific next steps for the analyst to review and approve.
 
@@ -124,10 +126,13 @@ async def run_response(alert: dict, final_verdict: dict, steering_context: str =
 
     inference_start = time.perf_counter()
 
-    # Single call — NO tools
+    # Single call — NO tools.
+    # On the local route (vLLM), guided_json constrains the output.
+    gj = guided_json_kwargs(ResponsePlan, route)
     response = await client.chat.completions.create(
         model=MODEL_NAME,
         messages=messages,
+        **gj,
     )
 
     inference_ms = int((time.perf_counter() - inference_start) * 1000)
@@ -135,9 +140,17 @@ async def run_response(alert: dict, final_verdict: dict, steering_context: str =
 
     content = response.choices[0].message.content or ""
 
+    # Try Pydantic-validated parse first, then regex fallback, then default.
+    result = None
     try:
-        result = extract_json(content)
-    except ValueError:
+        result = ResponsePlan.model_validate_json(content).model_dump()
+    except Exception:
+        try:
+            result = ResponsePlan.model_validate(extract_json(content)).model_dump()
+        except Exception:
+            pass
+
+    if result is None:
         # Retry once
         messages.append({"role": "assistant", "content": content})
         messages.append({
@@ -147,14 +160,21 @@ async def run_response(alert: dict, final_verdict: dict, steering_context: str =
         response = await client.chat.completions.create(
             model=MODEL_NAME,
             messages=messages,
+            **gj,
         )
         content = response.choices[0].message.content or ""
         try:
-            result = extract_json(content)
-        except ValueError:
-            # Generate minimal default plan
-            severity = final_verdict.get("verified_severity", final_verdict.get("severity", "P3"))
-            result = _default_plan(alert, severity, final_verdict)
+            result = ResponsePlan.model_validate_json(content).model_dump()
+        except Exception:
+            try:
+                result = ResponsePlan.model_validate(extract_json(content)).model_dump()
+            except Exception:
+                pass
+
+    if result is None:
+        # Generate minimal default plan
+        severity = final_verdict.get("verified_severity", final_verdict.get("severity", "P3"))
+        result = _default_plan(alert, severity, final_verdict)
 
     # Log the response plan
     plan = result.get("response_plan", [])

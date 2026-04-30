@@ -1,15 +1,27 @@
 import json
+import logging
 from pathlib import Path
 
 DATA_DIR = Path(__file__).parent.parent / "data"
 _cache = None
+_logger = logging.getLogger("soc-claw.tools.asset_lookup")
 
 
 def _load_asset_inventory():
     global _cache
     if _cache is None:
+        from soc_claw.schemas import Asset
+
         with open(DATA_DIR / "asset_inventory.json") as f:
-            _cache = json.load(f)
+            raw = json.load(f)
+        validated = []
+        for i, item in enumerate(raw):
+            try:
+                asset = Asset.model_validate(item)
+                validated.append(asset.model_dump())
+            except Exception as exc:
+                _logger.warning("Skipping invalid asset entry at index %d: %s", i, exc)
+        _cache = validated
     return _cache
 
 

@@ -169,3 +169,17 @@ def log_analyst_action(alert_id: str, action: str, details: str):
     """Log an analyst action (approve/reject/steer)."""
     timestamp = datetime.now(timezone.utc).isoformat()
     logger.info(f"{timestamp} | analyst | {alert_id} | {action} | {details}")
+
+
+def guided_json_kwargs(schema_class, route: str) -> dict:
+    """Build ``extra_body`` kwargs for vLLM guided-JSON decoding.
+
+    Only applies on the ``local`` route where the backend is vLLM.
+    Cloud endpoints (e.g. Nvidia API) don't support the ``guided_json``
+    extension, so we return an empty dict and let the caller fall back
+    to regex-based ``extract_json`` parsing.
+    """
+    if route != "local":
+        return {}
+    return {"extra_body": {"guided_json": schema_class.model_json_schema()}}
+
