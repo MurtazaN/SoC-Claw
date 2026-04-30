@@ -16,4 +16,4 @@ build/
 dist/
 
 # Benchmark output (regenerated each run)
-soc-claw/benchmark/results/*.csv
+soc_claw/benchmark/results/*.csv

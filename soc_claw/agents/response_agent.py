@@ -1,11 +1,7 @@
 import json
 import time
-import sys
-from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
-from utils import (
+from soc_claw.utils import (
     extract_json,
     get_client,
     route_request,

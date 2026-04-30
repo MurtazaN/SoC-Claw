@@ -24,18 +24,16 @@ Flow:
     approved steps execute via response_tools.py
 """
 
+import ipaddress
 import json
 import time
-import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent))
-
-from agents.triage_agent import run_triage
-from agents.verifier_agent import run_verification
-from agents.response_agent import run_response
-from tools import response_tools
-from utils import log_analyst_action
+from soc_claw.agents.triage_agent import run_triage
+from soc_claw.agents.verifier_agent import run_verification
+from soc_claw.agents.response_agent import run_response
+from soc_claw.tools import response_tools
+from soc_claw.utils import log_analyst_action
 
 
 def merge_verdict(triage_result: dict, verification_result: dict) -> dict:
@@ -138,6 +136,29 @@ async def run_pipeline(alert: dict, steering_context: str = None) -> dict:
     return result
 
 
+def _classify_indicator(target: str) -> str:
+    """Classify a `block_ioc` target as 'ip', 'domain', 'hash', or 'unknown'.
+
+    The previous heuristic (`"." in target and not target[0].isdigit()`)
+    mis-classified digit-starting domains like `1password.com` and `911.gov`
+    as IPs. `ipaddress.ip_address` validates v4/v6 cleanly; everything else
+    falls through to the dot/length checks.
+    """
+    target = (target or "").strip()
+    if not target:
+        return "unknown"
+    try:
+        ipaddress.ip_address(target)
+        return "ip"
+    except ValueError:
+        pass
+    if "." in target:
+        return "domain"
+    if len(target) in (32, 40, 64):  # MD5, SHA1, SHA256
+        return "hash"
+    return "unknown"
+
+
 def execute_approved_action(action: dict, alert: dict = None) -> dict:
     """Execute an approved response action.
 
@@ -154,13 +175,7 @@ def execute_approved_action(action: dict, alert: dict = None) -> dict:
     if action_type == "isolate_host":
         return response_tools.isolate_host(target)
     elif action_type == "block_ioc":
-        # Infer indicator type from target
-        indicator_type = "ip"
-        if "." in target and not target[0].isdigit():
-            indicator_type = "domain"
-        elif len(target) == 32 or len(target) == 64:
-            indicator_type = "hash"
-        return response_tools.block_ioc(target, indicator_type)
+        return response_tools.block_ioc(target, _classify_indicator(target))
     elif action_type == "create_ticket":
         priority_map = {"P1": "critical", "P2": "high", "P3": "medium", "P4": "low"}
         severity = action.get("_severity", "P3")

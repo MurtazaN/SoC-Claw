@@ -22,7 +22,7 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
-      - ./soc-claw/benchmark/results:/app/benchmark/results
+      - ./soc_claw/benchmark/results:/app/soc_claw/benchmark/results
     restart: unless-stopped
 
   benchmark:
@@ -37,7 +37,7 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
-      - ./soc-claw/benchmark/results:/app/benchmark/results
-    entrypoint: ["python", "benchmark/harness.py"]
+      - ./soc_claw/benchmark/results:/app/soc_claw/benchmark/results
+    entrypoint: ["python", "-m", "soc_claw.benchmark.harness"]
     command: ["30"]
     restart: "no"

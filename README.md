@@ -52,36 +52,38 @@ Raw Alert → Triage Agent  → Verifier Agent (QA) → Response Agent (plan)
 ## Project Structure
 
 ```
-soc-claw/
-├── agents/
-│   ├── triage_agent.py          # Triage Agent — calls tools, scores severity (HAS tools)
-│   ├── verifier_agent.py        # Verifier Agent — QA check (NO tools)
-│   └── response_agent.py        # Response Agent — action plans (NO tools)
-├── tools/
-│   ├── ip_reputation.py         # IP threat intel lookup
-│   ├── mitre_lookup.py          # MITRE ATT&CK technique mapper
-│   ├── asset_lookup.py          # Asset inventory/CMDB lookup
-│   └── response_tools.py        # EDR, firewall, ticketing simulations
-├── data/
-│   ├── alerts.json              # 30 synthetic SIEM alerts with ground truth
-│   ├── threat_intel.json        # 20 known-bad IOCs
-│   ├── asset_inventory.json     # 15 hosts with criticality tiers
-│   └── mitre_techniques.json    # 20 ATT&CK techniques
-├── benchmark/
-│   ├── harness.py               # Runs all 30 alerts, measures metrics
-│   └── results/                 # Output CSVs
-├── backend/
-│   └── server.py                # FastAPI app — pages + JSON / SSE endpoints
-├── frontend/
-│   └── templates/
-│       └── index.html           # Red Hat-themed HTML interface (Tailwind + vanilla JS)
-├── config/
-│   └── privacy_routes.yaml      # Privacy routing rules
-├── pipeline.py                  # Orchestrator: Triage → Verifier → Response
-├── utils.py                     # Shared: JSON extraction, privacy router, LLM client
-├── requirements.txt
+SoC-Claw/                            # repo root
+├── pyproject.toml                   # package config + pinned deps
+├── uv.lock                          # exact-version lockfile (regenerate with `uv lock`)
+├── Dockerfile                       # uv-based build, non-root runtime
+├── docker-compose.yml               # app + benchmark services
+├── scripts/                         # host bootstrap, vLLM launcher
 ├── README.md
-└── SETUP.md                     # Full setup guide
+├── SETUP.md                         # full setup guide
+└── soc_claw/                        # the Python package
+    ├── __init__.py
+    ├── pipeline.py                  # Orchestrator: Triage → Verifier → Response
+    ├── utils.py                     # Shared: JSON extraction, privacy router, LLM client
+    ├── agents/
+    │   ├── triage_agent.py          # HAS tools: enrichment + severity scoring
+    │   ├── verifier_agent.py        # NO tools: QA check
+    │   └── response_agent.py        # NO tools: action planning
+    ├── tools/
+    │   ├── ip_reputation.py         # IP threat intel lookup
+    │   ├── mitre_lookup.py          # MITRE ATT&CK technique mapper
+    │   ├── asset_lookup.py          # Asset inventory/CMDB lookup
+    │   └── response_tools.py        # EDR, firewall, ticketing simulations
+    ├── data/                        # alerts.json, threat_intel.json, asset_inventory.json, mitre_techniques.json
+    ├── config/
+    │   └── privacy_routes.yaml      # Privacy routing rules
+    ├── benchmark/
+    │   ├── harness.py               # `python -m soc_claw.benchmark.harness [N]`
+    │   └── results/                 # Output CSVs (gitignored)
+    ├── backend/
+    │   └── server.py                # `python -m soc_claw.backend.server`
+    └── frontend/
+        └── templates/
+            └── index.html           # Tailwind + vanilla JS interface
 ```
 
 ## Data Layer

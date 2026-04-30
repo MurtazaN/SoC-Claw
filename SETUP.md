@@ -90,7 +90,7 @@ docker compose --profile benchmark run --rm benchmark 30
 docker compose --profile benchmark run --rm benchmark 5
 ```
 
-Results are written to `soc-claw/benchmark/results/run_<timestamp>.csv` on the host (mounted into the container at `/app/benchmark/results`).
+Results are written to `soc_claw/benchmark/results/run_<timestamp>.csv` on the host (mounted into the container at `/app/soc_claw/benchmark/results`).
 
 ## 7. Stop and clean up
 
@@ -122,7 +122,7 @@ bash scripts/run-host-vllm.sh
 bash scripts/setup.sh
 curl -fsS http://localhost:7860/        # should be 200
 docker compose --profile benchmark run --rm benchmark 3
-ls soc-claw/benchmark/results/run_*.csv  # CSV present on host
+ls soc_claw/benchmark/results/run_*.csv  # CSV present on host
 ```
 
 ## 10. Configuration reference
@@ -134,6 +134,6 @@ All runtime config is env-driven (see [.env.example](.env.example)):
 - `SOC_CLAW_CLOUD_URL` — default `https://integrate.api.nvidia.com/v1`
 - `NVIDIA_API_KEY` — required only for the cloud route
 - `SOC_CLAW_MODEL` — model name passed to both vLLM and the OpenAI client
-- `BENCHMARK_OUTPUT_DIR` — leave blank for host dev (`soc-claw/benchmark/results/`); compose overrides to `/app/benchmark/results`
+- `BENCHMARK_OUTPUT_DIR` — leave blank for host dev (`soc_claw/benchmark/results/`); compose overrides to `/app/soc_claw/benchmark/results`
 
 For the production target (llm-d / k8s), the same image ships unchanged; secrets become a k8s `Secret` and config a `ConfigMap` mounted as env.

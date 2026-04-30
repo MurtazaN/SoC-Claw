@@ -1,0 +1,39 @@
+[project]
+name = "soc-claw"
+version = "0.1.0"
+description = "Multi-agent SOC incident response coordinator"
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [{ name = "SOC-Claw" }]
+dependencies = [
+    "openai>=1.30",
+    "fastapi",
+    "uvicorn[standard]",
+    "jinja2",
+    "python-dotenv>=1.0",
+    "pyyaml",
+]
+
+# vLLM is intentionally NOT a project dependency. It is a host-only GPU
+# runtime with a CUDA-aware install path; install it separately:
+#   uv pip install vllm --torch-backend=auto
+# See SETUP.md.
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "freezegun>=1.4",
+]
+
+[build-system]
+requires = ["hatchling>=1.24"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["soc_claw"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"soc_claw/data" = "soc_claw/data"
+"soc_claw/config" = "soc_claw/config"
+"soc_claw/frontend/templates" = "soc_claw/frontend/templates"

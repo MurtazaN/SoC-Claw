@@ -1,11 +1,7 @@
 import json
 import time
-import sys
-from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
-from utils import (
+from soc_claw.utils import (
     extract_json,
     get_client,
     route_request,
@@ -14,9 +10,9 @@ from utils import (
     log_inference,
     MODEL_NAME,
 )
-from tools.ip_reputation import ip_reputation
-from tools.mitre_lookup import mitre_lookup
-from tools.asset_lookup import asset_lookup
+from soc_claw.tools.ip_reputation import ip_reputation
+from soc_claw.tools.mitre_lookup import mitre_lookup
+from soc_claw.tools.asset_lookup import asset_lookup
 
 SYSTEM_PROMPT = """You are a SOC Tier 2 security analyst performing alert triage. You are given a raw security alert along with pre-gathered enrichment data from three sources: IP reputation, asset inventory, and MITRE ATT&CK technique mapping.
 

@@ -1,6 +1,6 @@
 """SOC-Claw FastAPI Backend.
 
-Serves the HTML UI from soc-claw/frontend/templates/index.html and exposes
+Serves the HTML UI from soc_claw/frontend/templates/index.html and exposes
 JSON + SSE endpoints for the pipeline. The benchmark "run all" path
 streams per-alert progress over Server-Sent Events so the analyst sees
 results as they arrive instead of waiting for the whole batch.
@@ -9,25 +9,21 @@ results as they arrive instead of waiting for the whole batch.
 import asyncio
 import json
 import logging
-import sys
+import os
 import time
 from pathlib import Path
-
-# Backend lives one level under the package root; expose package-root
-# modules (pipeline, utils, agents, tools) on sys.path.
-sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
 
-from pipeline import (
+from soc_claw.pipeline import (
     run_pipeline,
     execute_approved_action,
     load_alerts,
     get_alert_by_id,
 )
-from utils import log_analyst_action
+from soc_claw.utils import log_analyst_action
 
 logger = logging.getLogger("soc-claw.server")
 
@@ -90,91 +86,125 @@ def _sse(event: str, data: dict) -> str:
     return f"event: {event}\ndata: {json.dumps(data)}\n\n"
 
 
+class _RunAllAggregator:
+    """Accumulator for per-alert rows from the run-all stream.
+
+    Owns the running counters, error count, and final summary build so the
+    SSE stream loop stays a thin sequence of yields.
+    """
+
+    def __init__(self) -> None:
+        self.results: list[dict] = []
+        self.counts: dict[str, int] = {"P1": 0, "P2": 0, "P3": 0, "P4": 0}
+        self.triage_correct = 0
+        self.verified_correct = 0
+        self.errors = 0
+
+    def add(self, row: dict) -> None:
+        self.results.append(row)
+        verified = row.get("verified")
+        if verified in self.counts:
+            self.counts[verified] += 1
+        if row.get("triage") == row.get("ground_truth"):
+            self.triage_correct += 1
+        if row.get("correct"):
+            self.verified_correct += 1
+        if row.get("triage") == "ERROR":
+            self.errors += 1
+
+    def summary(self, total: int, elapsed: float) -> dict:
+        # Sort embedded results so the final table renders in stable
+        # alert-id order regardless of completion order.
+        self.results.sort(key=lambda r: r["alert_id"])
+        pct = (lambda x: round(x / total * 100, 1)) if total else (lambda _: 0)
+        return {
+            "total": total,
+            "elapsed_s": round(elapsed, 1),
+            "counts": self.counts,
+            "triage_accuracy": pct(self.triage_correct),
+            "verified_accuracy": pct(self.verified_correct),
+            "improvement": pct(self.verified_correct - self.triage_correct),
+            "errors": self.errors,
+            "results": self.results,
+        }
+
+
+async def _process_alert_for_stream(alert: dict, sem: asyncio.Semaphore) -> dict:
+    """Run one alert through the pipeline under a concurrency semaphore.
+
+    Returns the row dict the SSE stream will emit. Errors are converted
+    into an `ERROR` row rather than propagating, so a single bad alert
+    doesn't terminate the whole stream.
+    """
+    gt_sev = alert["ground_truth"]["severity"]
+    async with sem:
+        try:
+            result = await run_pipeline(alert)
+            triage_sev = result["triage_result"].get("severity", "P3")
+            if result.get("was_flagged"):
+                verified_sev = triage_sev
+            else:
+                verified_sev = result["final_verdict"].get("verified_severity", triage_sev)
+            return {
+                "alert_id": alert["id"],
+                "ground_truth": gt_sev,
+                "triage": triage_sev,
+                "verified": verified_sev,
+                "correct": verified_sev == gt_sev,
+                "decision": result["verification_result"].get("decision", "unknown"),
+                "latency_ms": result["timing"]["total_ms"],
+            }
+        except Exception as e:
+            logger.exception("run-all failed on %s", alert["id"])
+            return {
+                "alert_id": alert["id"],
+                "ground_truth": gt_sev,
+                "triage": "ERROR",
+                "verified": "ERROR",
+                "correct": False,
+                "decision": "error",
+                "latency_ms": 0,
+                "error": str(e),
+            }
+
+
 @app.get("/api/run-all")
 async def api_run_all():
     """Stream per-alert progress as Server-Sent Events.
 
-    The browser opens an EventSource() against this endpoint and receives
-    three event types:
-      - `progress`: per-alert, before processing starts
-      - `result`:   per-alert, after triage/verify/response complete
-      - `summary`:  final aggregate (counts, accuracy, full results list)
+    Alerts run concurrently up to `SOC_CLAW_CONCURRENCY` (default 5). The
+    browser opens an EventSource() and receives three event types:
+      - `start`:   once, before any work starts. Carries `total` and
+                   `concurrency`.
+      - `result`:  per-alert, in completion order (NOT alert-id order).
+                   Carries the same row shape as the final summary plus a
+                   `completed` counter.
+      - `summary`: final aggregate (counts, accuracy, full results list,
+                   sorted by alert_id for stable display).
     """
     alerts = load_alerts()
     total = len(alerts)
+    concurrency = max(1, int(os.environ.get("SOC_CLAW_CONCURRENCY", "5")))
 
     async def stream():
-        results = []
-        counts = {"P1": 0, "P2": 0, "P3": 0, "P4": 0}
-        triage_correct = 0
-        verified_correct = 0
-        errors = 0
-        start = time.perf_counter()
+        agg = _RunAllAggregator()
+        started_at = time.perf_counter()
+        yield _sse("start", {"total": total, "concurrency": concurrency})
 
-        for i, alert in enumerate(alerts):
-            yield _sse("progress", {
-                "index": i,
-                "total": total,
-                "alert_id": alert["id"],
-                "rule_name": alert.get("rule_name", ""),
-            })
+        sem = asyncio.Semaphore(concurrency)
+        tasks = [
+            asyncio.create_task(_process_alert_for_stream(a, sem))
+            for a in alerts
+        ]
+        completed = 0
+        for fut in asyncio.as_completed(tasks):
+            row = await fut
+            completed += 1
+            agg.add(row)
+            yield _sse("result", {**row, "completed": completed})
 
-            gt_sev = alert["ground_truth"]["severity"]
-            try:
-                result = await run_pipeline(alert)
-                triage_sev = result["triage_result"].get("severity", "P3")
-                if result.get("was_flagged"):
-                    verified_sev = triage_sev
-                else:
-                    verified_sev = result["final_verdict"].get(
-                        "verified_severity", triage_sev
-                    )
-
-                counts[verified_sev] = counts.get(verified_sev, 0) + 1
-                if triage_sev == gt_sev:
-                    triage_correct += 1
-                if verified_sev == gt_sev:
-                    verified_correct += 1
-
-                row = {
-                    "alert_id": alert["id"],
-                    "ground_truth": gt_sev,
-                    "triage": triage_sev,
-                    "verified": verified_sev,
-                    "correct": verified_sev == gt_sev,
-                    "decision": result["verification_result"].get(
-                        "decision", "unknown"
-                    ),
-                    "latency_ms": result["timing"]["total_ms"],
-                }
-            except Exception as e:
-                logger.exception("run-all failed on %s", alert["id"])
-                errors += 1
-                row = {
-                    "alert_id": alert["id"],
-                    "ground_truth": gt_sev,
-                    "triage": "ERROR",
-                    "verified": "ERROR",
-                    "correct": False,
-                    "decision": "error",
-                    "latency_ms": 0,
-                    "error": str(e),
-                }
-            results.append(row)
-            yield _sse("result", row)
-
-        elapsed = time.perf_counter() - start
-        summary = {
-            "total": total,
-            "elapsed_s": round(elapsed, 1),
-            "counts": counts,
-            "triage_accuracy": round(triage_correct / total * 100, 1) if total else 0,
-            "verified_accuracy": round(verified_correct / total * 100, 1) if total else 0,
-            "improvement": round((verified_correct - triage_correct) / total * 100, 1) if total else 0,
-            "errors": errors,
-            "results": results,
-        }
-        yield _sse("summary", summary)
+        elapsed = time.perf_counter() - started_at
+        yield _sse("summary", agg.summary(total, elapsed))
 
     return StreamingResponse(
         stream(),
@@ -221,7 +251,7 @@ async def api_override(request: Request):
 
     log_analyst_action(alert_id, "override", f"Set severity to {severity}")
 
-    from agents.response_agent import run_response
+    from soc_claw.agents.response_agent import run_response
     final_verdict = {
         "verified_severity": severity,
         "severity": severity,
