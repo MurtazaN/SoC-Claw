@@ -31,4 +31,4 @@ ENV PYTHONUNBUFFERED=1 \
 
 EXPOSE 7860
 
-CMD ["python", "ui/server.py"]
+CMD ["python", "backend/server.py"]

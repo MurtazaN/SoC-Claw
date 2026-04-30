@@ -545,10 +545,24 @@ async function approveStep(idx) {
     const step = plan[idx];
     if (!step) return;
     const alert = currentResult.alert;
-    const res = await fetch('/api/approve', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: step, alert }) });
-    const result = await res.json();
-    const el = document.getElementById('step-' + step.step);
-    if (el) el.innerHTML += `<div class="mt-2 text-xs text-green-600 font-bold">✓ Executed — ${result.action || result.status}</div>`;
+    // Pass the plan's severity so the backend can derive ticket priority.
+    // Without this, response_tools.create_ticket defaults to "medium" for
+    // every alert — see CODE_REVIEW B1.
+    const severity = (currentResult.response_plan || {}).severity_acted_on || null;
+    try {
+        const res = await fetch('/api/approve', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: step, alert, severity }),
+        });
+        const result = await res.json();
+        const el = document.getElementById('step-' + step.step);
+        if (el) el.innerHTML += `<div class="mt-2 text-xs text-green-600 font-bold">✓ Executed — ${result.action || result.status}</div>`;
+    } catch (e) {
+        console.error('approveStep failed', e);
+        const el = document.getElementById('step-' + step.step);
+        if (el) el.innerHTML += `<div class="mt-2 text-xs text-red-600 font-bold">✗ Approve failed</div>`;
+    }
 }
 async function rejectStep(idx) {
     const plan = (currentResult.response_plan || {}).response_plan || [];
@@ -574,29 +588,87 @@ async function overrideSeverity() {
 }
 
 // ──────── Run All 30 ────────
-async function runAllAlerts() {
+// Streams per-alert progress over Server-Sent Events. The backend yields
+// three event types:
+//   - progress: per-alert, before processing starts
+//   - result:   per-alert, after triage/verify/response complete
+//   - summary:  final aggregate that drives renderBenchmark()
+function runAllAlerts() {
     const btn = document.getElementById('run-all-btn');
     btn.disabled = true;
     btn.innerHTML = '<span class="loading-pulse">Processing...</span>';
-    document.getElementById('benchmark-results').innerHTML = `
-        <div class="bg-white border border-zinc-200 rounded-lg p-12 text-center">
-            <span class="material-symbols-outlined text-red-600 text-[64px] loading-pulse">speed</span>
-            <p class="text-zinc-600 mt-4 font-bold">Processing all 30 alerts through the pipeline...</p>
-            <p class="text-zinc-400 text-sm mt-1">This may take 15-30 minutes</p>
-        </div>`;
     setStatus('Benchmark running...', true);
 
-    try {
-        const res = await fetch('/api/run-all', { method: 'POST' });
-        const data = await res.json();
+    // Live UI: progress bar + a table that fills in row-by-row.
+    document.getElementById('benchmark-results').innerHTML = `
+        <div class="bg-white border border-zinc-200 rounded-lg p-6 mb-6">
+            <div class="flex items-center justify-between mb-3">
+                <span class="text-[11px] font-bold uppercase tracking-widest text-zinc-500">Processing</span>
+                <span class="text-[11px] font-mono text-zinc-500" id="bench-progress-count">0 / 0</span>
+            </div>
+            <div class="w-full bg-zinc-200 h-2 rounded-full overflow-hidden">
+                <div id="bench-progress-bar" class="h-full bg-red-600 transition-all" style="width:0%"></div>
+            </div>
+            <p id="bench-current" class="text-sm text-zinc-600 mt-3">Starting...</p>
+        </div>
+        <div class="bg-white border border-zinc-200 rounded-lg shadow-sm overflow-hidden">
+            <div class="p-4 border-b border-zinc-100 bg-zinc-50 text-[11px] font-bold uppercase tracking-widest">Per-Alert Results (live)</div>
+            <table class="w-full text-left"><thead><tr class="bg-zinc-50/80 border-b border-zinc-200 text-[10px] uppercase tracking-wider text-zinc-500 font-bold">
+                <th class="px-5 py-3">Alert</th><th class="px-5 py-3">Ground Truth</th><th class="px-5 py-3">Triage</th><th class="px-5 py-3">Verified</th><th class="px-5 py-3">Match</th><th class="px-5 py-3">Decision</th><th class="px-5 py-3">Latency</th>
+            </tr></thead><tbody id="bench-rows"></tbody></table>
+        </div>`;
+
+    const es = new EventSource('/api/run-all');
+    let totalSeen = 0;
+
+    const finish = (label) => {
+        es.close();
+        setStatus(label, false);
+        btn.disabled = false;
+        btn.innerHTML = '<span class="material-symbols-outlined text-[18px]">play_arrow</span>Start Benchmark';
+    };
+
+    es.addEventListener('progress', (ev) => {
+        const data = JSON.parse(ev.data);
+        totalSeen = data.total;
+        const pct = data.total ? (data.index / data.total * 100).toFixed(0) : 0;
+        document.getElementById('bench-progress-bar').style.width = pct + '%';
+        document.getElementById('bench-progress-count').textContent = `${data.index} / ${data.total}`;
+        // textContent for alert_id + rule_name (rule_name in particular is
+        // SIEM-sourced and could carry markup — see CODE_REVIEW S2).
+        const cur = document.getElementById('bench-current');
+        cur.textContent = `${data.alert_id} — ${data.rule_name}`;
+    });
+
+    es.addEventListener('result', (ev) => {
+        const r = JSON.parse(ev.data);
+        const color = r.correct ? 'text-green-600' : 'text-red-600';
+        const tr = document.createElement('tr');
+        tr.className = 'border-b border-zinc-100 hover:bg-zinc-50';
+        tr.innerHTML = `
+            <td class="px-5 py-2.5 font-mono text-xs">${r.alert_id}</td>
+            <td class="px-5 py-2.5">${sevBadge(r.ground_truth)}</td>
+            <td class="px-5 py-2.5">${r.triage === 'ERROR' ? '<span class="text-red-600 text-xs font-bold">ERR</span>' : sevBadge(r.triage)}</td>
+            <td class="px-5 py-2.5">${r.verified === 'ERROR' ? '<span class="text-red-600 text-xs font-bold">ERR</span>' : sevBadge(r.verified)}</td>
+            <td class="px-5 py-2.5"><span class="font-bold ${color}">${r.correct ? '✓' : '✗'}</span></td>
+            <td class="px-5 py-2.5 text-xs text-zinc-500">${r.decision}</td>
+            <td class="px-5 py-2.5 font-mono text-xs text-zinc-400">${(r.latency_ms / 1000).toFixed(1)}s</td>
+        `;
+        document.getElementById('bench-rows').appendChild(tr);
+    });
+
+    es.addEventListener('summary', (ev) => {
+        const data = JSON.parse(ev.data);
         renderBenchmark(data);
-        setStatus('Benchmark complete', false);
-    } catch (e) {
-        document.getElementById('benchmark-results').innerHTML = `<div class="text-red-600 p-8">${e.message}</div>`;
-        setStatus('Error', false);
-    }
-    btn.disabled = false;
-    btn.innerHTML = '<span class="material-symbols-outlined text-[18px]">play_arrow</span>Start Benchmark';
+        finish('Benchmark complete');
+    });
+
+    es.onerror = (err) => {
+        console.error('run-all SSE error', err);
+        const cur = document.getElementById('bench-current');
+        if (cur && totalSeen === 0) cur.textContent = 'Stream error before any alerts processed';
+        finish('Error');
+    };
 }
 
 function renderBenchmark(data) {

@@ -70,10 +70,11 @@ soc-claw/
 ├── benchmark/
 │   ├── harness.py               # Runs all 30 alerts, measures metrics
 │   └── results/                 # Output CSVs
-├── ui/
-│   ├── server.py                # FastAPI backend + API endpoints
-│   ├── templates/index.html     # Red Hat-themed HTML interface
-│   └── app.py                   # Gradio analyst interface (alternative)
+├── backend/
+│   └── server.py                # FastAPI app — pages + JSON / SSE endpoints
+├── frontend/
+│   └── templates/
+│       └── index.html           # Red Hat-themed HTML interface (Tailwind + vanilla JS)
 ├── config/
 │   └── privacy_routes.yaml      # Privacy routing rules
 ├── pipeline.py                  # Orchestrator: Triage → Verifier → Response
