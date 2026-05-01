@@ -13,6 +13,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import time
 from pathlib import Path
 
@@ -61,7 +62,8 @@ app.add_middleware(
     secret=SECRET_KEY,
     cookie_name="csrftoken",
     cookie_samesite="lax",
-    exempt_urls={"/login"},
+    exempt_urls=[re.compile(r"^/login/?$")],
+    # exempt_urls={"/login"},
 )
 
 TEMPLATES_DIR = Path(__file__).parent.parent / "frontend" / "templates"
