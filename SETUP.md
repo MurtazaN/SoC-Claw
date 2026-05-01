@@ -125,3 +125,4 @@ docker compose down --rmi all  # also delete the image
 | Port 7860 already in use | `kill $(lsof -t -i:7860)` then `docker compose up -d`. |
 | `docker compose: command not found` | Install the Compose v2 plugin (separate from legacy `docker-compose`). |
 | 401 from cloud route | Set `NVIDIA_API_KEY` in `.env` and restart the container. |
+| `403`/`429` from Guard | Hit your own rate limit or whitelist. Tune `SOC_CLAW_RATE_LIMIT` / `SOC_CLAW_IP_WHITELIST` in `.env`, then `docker compose up -d`. To clear an auto-ban, restart the app container. |

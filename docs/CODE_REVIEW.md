@@ -166,11 +166,11 @@ If you have ongoing users for both UIs, the alternative is to extract a `soc_cla
 ### S6 🟡 Hardcoded `Analyst_04` in `index.html:110`
 Frontend pretends to know who the analyst is, but the value is a static string. Fine for demo; reflects no real auth. After S1 lands, replace with a Jinja variable from `request.session`.
 
-### S7 🟡 Compose publishes `:7860` on `0.0.0.0`
-`docker-compose.yml` `ports: ["7860:7860"]` binds to all interfaces by default. On the Brev VM that's externally reachable from the public IP. Bind to `127.0.0.1:7860:7860` and reach via SSH tunnel until S1 is addressed.
+### S7 ✅ RESOLVED — compose now binds `:7860` on loopback
+`docker-compose.yml` ports entry is now `127.0.0.1:7860:7860`. Reach via SSH tunnel (`ssh -L 7860:localhost:7860 <host>`). FastAPI Guard's IP whitelist (default loopback + RFC1918) provides the second layer at the application level.
 
-### S8 🟡 No rate limiting / abuse controls
-Anyone (after S1 fix, "any logged-in user") can spam `/api/run-all` and saturate the GPU. Production needs `slowapi` or upstream rate limiting at the proxy.
+### S8 ✅ RESOLVED — FastAPI Guard handles rate limiting + auto-ban
+[soc_claw/backend/security.py](soc_claw/backend/security.py) builds a `SecurityConfig` from env vars; [soc_claw/backend/server.py](soc_claw/backend/server.py) registers `SecurityMiddleware` as the outermost middleware. Defaults are lenient (200 req/min global, auto-ban after 20 consecutive failures, 1-hour ban duration) — see [docs/config-reference.md](docs/config-reference.md). Per-route stricter limits on `/login`, `/api/run-all`, `/api/run/{id}` are documented as a future ramp.
 
 ### S9 🟢 `log_inference` doesn't log the prompt hash
 `utils.py:128-132` records the prompt SHA-256 for routing decisions (good). `log_inference` only records latency — harder to correlate latency outliers to the prompt that caused them. Add the same hash.

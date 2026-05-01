@@ -14,7 +14,10 @@ services:
     image: soc-claw:dev
     container_name: soc-claw-app
     ports:
-      - "7860:7860"
+      # Loopback-only by default. External access via SSH tunnel
+      # (`ssh -L 7860:localhost:7860 <host>`) so the network firewall
+      # is the loopback interface itself, not just FastAPI Guard.
+      - "127.0.0.1:7860:7860"
     env_file:
       - .env
     environment:

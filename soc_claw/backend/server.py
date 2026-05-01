@@ -19,8 +19,10 @@ from pathlib import Path
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
+from guard import SecurityMiddleware
 from starlette_csrf import CSRFMiddleware
 
+from soc_claw.backend.security import build_security_config
 from soc_claw.logging_config import setup_logging
 from soc_claw.telemetry import setup_tracing
 
@@ -90,6 +92,17 @@ async def auth_middleware(request: Request, call_next):
     # Attach user to request state for downstream use (S6)
     request.state.user = user
     return await call_next(request)
+
+
+# ───────────────────── FastAPI Guard (S7 + S8) ──────────────────────
+# Network-layer WAF: IP whitelist, per-IP rate limiting, auto-banning,
+# security headers, attack-pattern detection.
+#
+# Registered LAST so Starlette's LIFO middleware ordering puts it
+# OUTERMOST at runtime — bad traffic is rejected before any session,
+# CSRF, or handler work runs. Runtime order:
+#   request → SecurityMiddleware → auth_middleware → CSRFMiddleware → handler
+app.add_middleware(SecurityMiddleware, config=build_security_config())
 
 
 # ──────────────────────── Auth Pages ────────────────────────
