@@ -1,0 +1,103 @@
+/*
+ * SOC-Claw stylesheet — built once at image build time, served from /static.
+ *
+ * Self-hosted everything. No external CDN, no third-party fonts at runtime.
+ * Sidesteps the COEP issue triggered by FastAPI Guard's default headers
+ * (cross-origin scripts from cdn.tailwindcss.com get blocked) and removes
+ * the only runtime network dependency the UI had.
+ *
+ * Build:  cd soc_claw/frontend/styles && npm install && npm run build
+ *         (also runs automatically in the Dockerfile's frontend-build stage)
+ */
+
+/* --- Self-hosted fonts (woff2 copied from @fontsource-variable + material-symbols) --- */
+
+@font-face {
+  font-family: 'Red Hat Display';
+  font-style: normal;
+  font-weight: 100 1000;
+  font-display: swap;
+  src: url('/static/fonts/red-hat-display.woff2') format('woff2-variations');
+}
+
+@font-face {
+  font-family: 'Red Hat Text';
+  font-style: normal;
+  font-weight: 100 1000;
+  font-display: swap;
+  src: url('/static/fonts/red-hat-text.woff2') format('woff2-variations');
+}
+
+@font-face {
+  font-family: 'Red Hat Mono';
+  font-style: normal;
+  font-weight: 100 1000;
+  font-display: swap;
+  src: url('/static/fonts/red-hat-mono.woff2') format('woff2-variations');
+}
+
+@font-face {
+  font-family: 'Material Symbols Outlined';
+  font-style: normal;
+  font-weight: 100 700;
+  font-display: block;
+  src: url('/static/fonts/material-symbols-outlined.woff2') format('woff2-variations');
+}
+
+/* --- Tailwind --- */
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* --- Project-wide utilities (moved out of inline <style> blocks) --- */
+
+.material-symbols-outlined {
+  font-family: 'Material Symbols Outlined';
+  font-weight: normal;
+  font-style: normal;
+  font-size: 24px;
+  line-height: 1;
+  letter-spacing: normal;
+  text-transform: none;
+  display: inline-block;
+  white-space: nowrap;
+  word-wrap: normal;
+  direction: ltr;
+  font-feature-settings: 'liga';
+  -webkit-font-smoothing: antialiased;
+  font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+}
+
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: #1c1b1b; }
+::-webkit-scrollbar-thumb { background: #313030; border-radius: 10px; }
+
+.sev-p1 { background: #EE0000; }
+.sev-p2 { background: #ea580c; }
+.sev-p3 { background: #2563eb; }
+.sev-p4 { background: #16a34a; }
+.sev-text-p1 { color: #EE0000; }
+.sev-text-p2 { color: #ea580c; }
+.sev-text-p3 { color: #2563eb; }
+.sev-text-p4 { color: #16a34a; }
+.sev-border-p1 { border-left: 4px solid #EE0000; }
+.sev-border-p2 { border-left: 4px solid #ea580c; }
+.sev-border-p3 { border-left: 4px solid #2563eb; }
+.sev-border-p4 { border-left: 4px solid #16a34a; }
+
+.decision-confirmed { background: #16a34a; }
+.decision-adjusted { background: #ea580c; }
+.decision-flagged { background: #EE0000; }
+
+.fade-in { animation: fadeIn 0.3s ease-in; }
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.loading-pulse { animation: pulse 1.5s ease-in-out infinite; }
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}

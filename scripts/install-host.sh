@@ -1,0 +1,102 @@
+#!/bin/bash
+# =============================================================================
+# SOC-Claw — host bootstrap.
+#
+# Installs uv, a managed Python 3.11, the project venv (from uv.lock so
+# every host gets identical versions), and vLLM (Linux+NVIDIA only).
+# Provisions a .env from .env.example if one is not present (values are
+# NOT auto-populated — the operator fills them in by hand).
+#
+# Idempotent: safe to re-run.
+# =============================================================================
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+VENV_DIR="${REPO_ROOT}/.venv"
+
+echo "============================================="
+echo "  SOC-Claw — host bootstrap"
+echo "============================================="
+
+# --- 1. uv (manages Python, the venv, and dep installs from uv.lock) ---
+if ! command -v uv &>/dev/null; then
+    echo "[1/4] Installing uv..."
+    curl -LsSf https://astral.sh/uv/install.sh | sh
+    # The installer writes to ~/.local/bin; make it visible to this script.
+    export PATH="$HOME/.local/bin:$PATH"
+else
+    echo "[1/4] uv detected: $(uv --version)"
+fi
+
+# --- 2. Managed Python 3.11 (uv downloads it if missing) ---
+echo "[2/4] Ensuring Python 3.11..."
+uv python install 3.11
+
+# --- 3. Project venv synced from uv.lock ---
+# `uv sync` creates .venv if missing, then installs the project + every dep
+# at the exact version in uv.lock — same on every host, no resolution drift.
+echo "[3/4] uv sync (frozen)..."
+cd "${REPO_ROOT}"
+uv sync --frozen
+# shellcheck disable=SC1091
+source "${VENV_DIR}/bin/activate"
+
+# --- 4. vLLM (host GPU only) ---
+# vLLM ships CUDA-only wheels (Linux x86_64 / Windows). macOS and Linux
+# without an NVIDIA GPU can't run it — skip cleanly on those hosts. The
+# Mac dev flow uses the container + a port-forward to a remote vLLM; see
+# SETUP.md §1.
+#
+# vLLM is intentionally OUT of pyproject.toml so non-GPU hosts can sync
+# the rest of the deps without hitting the CUDA-wheel resolution dead end.
+OS_NAME="$(uname -s)"
+if [ "${OS_NAME}" != "Linux" ]; then
+    echo "[4/4] Skipping vLLM install — no CUDA wheels for ${OS_NAME}."
+    echo "       Mac/Windows: point SOC_CLAW_LOCAL_VLLM_URL at a remote vLLM."
+elif ! command -v nvidia-smi &>/dev/null; then
+    echo "[4/4] Skipping vLLM install — no nvidia-smi on this Linux host."
+    echo "       Install an NVIDIA driver and re-run if you want host vLLM."
+elif ! python -c "import vllm" &>/dev/null; then
+    echo "[4/4] Installing vLLM 0.10.2 (cu126) + compatible transformers..."
+    # Why these pins (verified working on Brev Instance A6000 48 GiB "VM Mode w/ Jupyter", driver 570.x):
+    #   - vllm: latest (0.11+) ships only CUDA-13 wheels, but the driver caps
+    #     at CUDA 12.8 → must pin to last cu126-compatible line.
+    #   - transformers: 5.x renamed PreTrainedTokenizerBase → TokenizersBackend
+    #     and removed all_special_tokens_extended, breaking vllm 0.10.2's
+    #     tokenizer wrapper. 4.51+ has the qwen2_5_omni module vllm imports.
+    # On a host with CUDA 13 driver (≥ 580), swap both lines for:
+    #   uv pip install vllm --torch-backend=auto
+    uv pip install "vllm==0.10.2" --torch-backend=cu126
+    uv pip install "transformers>=4.51,<5.0"
+else
+    echo "[4/4] vLLM already importable in venv."
+fi
+
+# --- .env provisioning (manual population required) ---
+echo "Checking .env..."
+if [ ! -f "${REPO_ROOT}/.env" ]; then
+    if [ ! -f "${REPO_ROOT}/.env.example" ]; then
+        echo "  ✗ Neither .env nor .env.example found in ${REPO_ROOT}." >&2
+        exit 1
+    fi
+    cp "${REPO_ROOT}/.env.example" "${REPO_ROOT}/.env"
+    chmod 600 "${REPO_ROOT}/.env"
+    echo ""
+    echo "  ⚠ Created ${REPO_ROOT}/.env from .env.example."
+    echo "    Open it and set:"
+    echo "      HF_TOKEN          (required for vLLM to download model weights)"
+    echo "      NVIDIA_API_KEY    (only if using the cloud route)"
+    echo "    Then re-run this script."
+    exit 1
+fi
+echo "       .env present at ${REPO_ROOT}/.env"
+
+echo ""
+echo "============================================="
+echo "  ✅ Host bootstrap complete"
+echo ""
+echo "  Activate the venv in a new shell:"
+echo "    source ${VENV_DIR}/bin/activate"
+echo "============================================="

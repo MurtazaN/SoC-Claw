@@ -1,213 +1,128 @@
-# SOC-Claw Setup Guide
+# SOC-Claw Setup
 
-Complete setup for running the SOC-Claw three-agent incident response system.
+Two-terminal flow: vLLM on the host, app + benchmark in Docker.
 
-## 1. Pre-requirements
+## 1. Check prerequisites
 
-### OS and base tooling
-- Linux recommended (tested on Ubuntu 22.04)
-- Python 3.10+
-- `pip`, `git`, `curl`
+- Linux host with NVIDIA GPU, driver ≥ 570.x (≥ 580 to use the latest vLLM). Tested on Ubuntu 22.04, A6000 / L4. CPU-only is not practical.
+- Docker Engine + `docker compose` v2 plugin: `docker compose version`.
+- `git`, `curl`, `bash`.
 
-### GPU and CUDA
-- NVIDIA GPU required for local inference via vLLM
-- Compatible NVIDIA driver + CUDA runtime
-- CPU-only is not practical for interactive latency
+Mac dev (no GPU): run the container locally, point it at a remote vLLM via `ssh -L 8000:localhost:8000 <host>`. The container reaches it through `host.docker.internal:8000`.
 
-### Network ports
-| Port | Service |
-|------|---------|
-| `8000` | vLLM OpenAI-compatible endpoint |
-| `7860` | UI server (FastAPI or Gradio) |
-| `8001-8003` | Mock EDR/firewall/ITSM (NemoClaw policy) |
-
-### Credentials
-- `HF_TOKEN` — Hugging Face token for gated model downloads
-- `NVIDIA_API_KEY` — optional, for cloud-route inference
-
-Never commit secrets. Keep `.env` local.
-
-## 2. Install Dependencies
+## 2. Configure
 
 ```bash
-cd withvLLm-d
-
-python3 -m venv .venv
-source .venv/bin/activate
-pip install --upgrade pip wheel
-
-# Root dependencies (vLLM)
-pip install -r requirements.txt
-
-# SOC-Claw app dependencies
-pip install -r soc-claw/requirements.txt
+git clone https://github.com/MurtazaN/SoC-Claw
+cd SoC-Claw
+cp .env.example .env
+$EDITOR .env   # set HF_TOKEN
 ```
 
-### Installed packages
+`.env` is gitignored. Auth, observability, and model-selection vars are documented in [docs/config-reference.md](docs/config-reference.md).
 
-**Root** (`requirements.txt`): `vLLM`
-
-**SOC-Claw** (`soc-claw/requirements.txt`):
-- `openai>=1.30`
-- `gradio>=4.0`
-- `pyyaml`
-- `fastapi`
-- `uvicorn[standard]`
-- `jinja2`
-
-## 3. Models
-
-| Model | Purpose | When to use |
-|-------|---------|-------------|
-| `nvidia/Nemotron-Mini-4B-Instruct` | Active runtime model | Dev/demo on 1-2 GPUs (24-48GB VRAM) |
-| `nvidia/nemotron-3-super-120b-a12b` | PRD target model | Production with 8x80GB GPU server |
-
-The active model is set in `soc-claw/utils.py` → `MODEL_NAME`. Change it if you serve a different model.
-
-### Hardware sizing
-
-| Tier | Model | GPU | RAM | Disk |
-|------|-------|-----|-----|------|
-| Dev minimum | Nemotron-Mini-4B | 1x 24GB VRAM | 16GB | 30GB |
-| Comfortable dev | Nemotron-Mini-4B | 1x 48GB or 2x 24GB | 32GB | 60GB |
-| PRD-scale | Nemotron 120B | 8x 80GB (A100/H100) | 128GB+ | 300GB+ |
-
-## 4. Environment Variables
+## 3. Install (GPU host only)
 
 ```bash
-export HF_TOKEN="<your_hf_token>"
-export NVIDIA_API_KEY="<your_nvidia_key>"   # optional, for cloud route
+bash scripts/install-host.sh
 ```
 
-Note: The cloud client currently uses a placeholder API key in code. Set a real key and update `get_client()` in `utils.py` for working cloud inference.
+Idempotent. Installs `uv`, Python 3.11, the venv at `.venv/`, app deps, and (on Linux + NVIDIA only) vLLM. Other hosts skip vLLM and exit cleanly. If `.env` is missing on first run, the script copies from `.env.example` and exits — populate it, then re-run.
 
-## 5. Start vLLM (Terminal 1)
+For driver ≥ 580, replace the pinned vLLM line in [scripts/install-host.sh](scripts/install-host.sh) with `uv pip install vllm --torch-backend=auto`.
 
-### Option A: Dev model (recommended)
+## 4. Start vLLM (terminal 1, GPU host only)
 
 ```bash
-source .venv/bin/activate
-vllm serve nvidia/Nemotron-Mini-4B-Instruct --port 8000
+bash scripts/run-host-vllm.sh
 ```
 
-### Option B: With 2 GPUs
-
-```bash
-vllm serve nvidia/Nemotron-Mini-4B-Instruct --port 8000 --tensor-parallel-size 2
-```
-
-### Option C: PRD model (requires multi-GPU server)
-
-```bash
-vllm serve nvidia/nemotron-3-super-120b-a12b --port 8000 --tensor-parallel-size 8
-```
-
-If using Option C, update `MODEL_NAME` in `soc-claw/utils.py` to match.
-
-**Health check:**
+Wait for `Uvicorn running on http://0.0.0.0:8000`, then:
 
 ```bash
 curl http://localhost:8000/v1/models
 ```
 
-Wait until you see `Uvicorn running on http://0.0.0.0:8000`.
+The script reads `SOC_CLAW_MODEL` from `.env`.
 
-## 6. Run SOC-Claw (Terminal 2)
-
-```bash
-cd withvLLm-d/soc-claw
-source ../.venv/bin/activate
-```
-
-### Option A: FastAPI + HTML UI (recommended)
+## 5. Start the app (terminal 2)
 
 ```bash
-python ui/server.py
+bash scripts/setup.sh
 ```
 
-Open `http://<your-ip>:7860` in your browser.
-
-Features: Red Hat-themed dashboard, alert table, 3-column analysis view, per-step approve/reject, benchmark view.
-
-### Option B: Gradio UI (alternative)
+Re-runs install, builds `soc-claw:dev`, runs `docker compose up -d`. Manual equivalent:
 
 ```bash
-python ui/app.py
+docker compose build
+docker compose up -d
+docker compose logs -f app
 ```
 
-Open `http://<your-ip>:7860` or use `share=True` for a public link.
+Open **http://localhost:7860**. The app reaches vLLM via `host.docker.internal:8000` (mapped via `extra_hosts:` on Linux; native on Docker Desktop).
 
-**Only run one UI at a time** — both bind to port 7860.
-
-## 7. Run Benchmark
+## 6. Verify
 
 ```bash
-cd withvLLm-d/soc-claw
-source ../.venv/bin/activate
-
-# All 30 alerts
-python benchmark/harness.py
-
-# Subset (e.g., first 5)
-python benchmark/harness.py 5
+curl -fsS http://localhost:7860/                            # 200
+docker compose --profile benchmark run --rm benchmark 3     # 3-alert smoke run
+ls soc_claw/benchmark/results/run_*.csv                     # CSV present on host
 ```
 
-Results saved to: `soc-claw/benchmark/results/run_<timestamp>.csv`
-
-## 8. Data Integrity Check
+## 7. Run the benchmark
 
 ```bash
-cd withvLLm-d
-python3 -c "
-import json
-alerts = json.load(open('soc-claw/data/alerts.json'))
-assets = json.load(open('soc-claw/data/asset_inventory.json'))
-threat = json.load(open('soc-claw/data/threat_intel.json'))
-mitre = json.load(open('soc-claw/data/mitre_techniques.json'))
-print(f'Alerts: {len(alerts)} (expect 30)')
-print(f'Assets: {len(assets)} (expect 15)')
-print(f'Threat Intel: {len(threat)} (expect 20)')
-print(f'MITRE: {len(mitre)} (expect 20)')
-asset_names = {a[\"hostname\"].upper() for a in assets}
-missing = [a[\"id\"] for a in alerts if a[\"hostname\"].upper() not in asset_names]
-print(f'Missing hostnames: {missing or \"NONE\"}')
-"
+docker compose --profile benchmark run --rm benchmark 30    # all 30 alerts
+docker compose --profile benchmark run --rm benchmark 5     # subset
 ```
 
-Expected: all counts match, no missing hostnames.
+CSV → `soc_claw/benchmark/results/run_<timestamp>.csv` on the host.
 
-## 9. NemoClaw Integration
+## 8. Enable observability (optional)
 
-Policy files:
-- `soc-claw/config/nemoclaw_policy.yaml` — sandbox egress whitelist
-- `soc-claw/config/privacy_routes.yaml` — local vs cloud routing rules
+Logs are JSON to stderr by default; OTEL tracing is off until you point it at a collector.
 
-The privacy router checks prompts against regex patterns:
-- Internal IPs (`10.x.x.x`), hostnames (`DC-`, `SRV-`), payloads → route to **local** inference
-- Generic threat intel queries → route to **cloud** inference
+Collect logs in a file:
 
-Mock response tools (`isolate_host`, `block_ioc`, `create_ticket`, `escalate`) simulate EDR/firewall/ITSM actions. They are not standalone HTTP services.
+```bash
+echo "SOC_CLAW_LOG_FILE=/tmp/soc-claw.jsonl" >> .env
+docker compose up -d
+tail -f /tmp/soc-claw.jsonl
+```
 
-## 10. Troubleshooting
+Capture traces in local Jaeger:
+
+```bash
+docker run -d --rm --name jaeger -p 4317:4317 -p 16686:16686 \
+  jaegertracing/all-in-one:1.62
+echo "OTEL_EXPORTER_OTLP_ENDPOINT=http://host.docker.internal:4317" >> .env
+docker compose up -d
+# Trigger one alert via the UI, then open http://localhost:16686
+```
+
+Make the harness verbose (defaults to `WARNING`):
+
+```bash
+SOC_CLAW_LOG_LEVEL=INFO docker compose --profile benchmark run --rm benchmark 30
+```
+
+## 9. Stop
+
+```bash
+docker compose down            # stop the app
+docker compose down --rmi all  # also delete the image
+# Ctrl+C in terminal 1 to stop vLLM
+```
+
+## 10. Troubleshoot
 
 | Problem | Fix |
 |---------|-----|
-| `Connection refused` on port 8000 | vLLM is not running. Start it first. |
-| `CUDA out of memory` | Use a smaller model or add `--gpu-memory-utilization 0.85 --max-model-len 2048` |
-| `401` from cloud route | Set `NVIDIA_API_KEY` and update `get_client()` in `utils.py` |
-| Port 7860 already in use | `kill $(lsof -t -i:7860)` then restart |
-| Import errors | Run from `soc-claw/` directory as shown above |
-| Gradio share link not working | Use FastAPI server (`python ui/server.py`) instead |
-
-## 11. Quick Test Sequence
-
-```bash
-# 1. Start vLLM (terminal 1)
-vllm serve nvidia/Nemotron-Mini-4B-Instruct --port 8000
-
-# 2. In terminal 2:
-cd withvLLm-d/soc-claw
-python -m tools.ip_reputation          # test tools
-python benchmark/harness.py 3          # test 3 alerts
-python ui/server.py                    # launch UI
-```
+| `Connection refused` to vLLM from the container | `curl http://localhost:8000/v1/models` from the host. Confirm `extra_hosts:` is in `docker-compose.yml`. |
+| `host.docker.internal` not resolving on Linux | Upgrade Docker to ≥ 20.10, or set `SOC_CLAW_LOCAL_VLLM_URL=http://172.17.0.1:8000/v1` in `.env`. |
+| `CUDA out of memory` | Smaller model, or pass `--gpu-memory-utilization 0.85 --max-model-len 2048` to `vllm serve`. |
+| `libcudart.so.13: not found` | vLLM 0.11+ needs CUDA 13. Upgrade the driver to ≥ 580 or stay on the pinned `vllm==0.10.2 --torch-backend=cu126` (default in `install-host.sh`). |
+| Port 7860 already in use | `kill $(lsof -t -i:7860)` then `docker compose up -d`. |
+| `docker compose: command not found` | Install the Compose v2 plugin (separate from legacy `docker-compose`). |
+| 401 from cloud route | Set `NVIDIA_API_KEY` in `.env` and restart the container. |
+| `403`/`429` from Guard | Hit your own rate limit or whitelist. Tune `SOC_CLAW_RATE_LIMIT` / `SOC_CLAW_IP_WHITELIST` in `.env`, then `docker compose up -d`. To clear an auto-ban, restart the app container. |

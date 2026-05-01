@@ -1,0 +1,52 @@
+# SOC-Claw — local & dev orchestration.
+#
+# vLLM runs on the host (see scripts/run-host-vllm.sh). The app reaches it
+# via host.docker.internal:8000. On Linux, extra_hosts maps that name to
+# the host gateway; on Mac/Windows Docker Desktop already resolves it.
+#
+# Usage:
+#   docker compose up                                          # app on :7860
+#   docker compose --profile benchmark run --rm benchmark 5    # 5-alert run
+
+services:
+  app:
+    build: .
+    image: soc-claw:dev
+    container_name: soc-claw-app
+    ports:
+      # Loopback-only by default. External access via SSH tunnel
+      # (`ssh -L 7860:localhost:7860 <host>`) so the network firewall
+      # is the loopback interface itself, not just FastAPI Guard.
+      - "127.0.0.1:7860:7860"
+    env_file:
+      - .env
+    environment:
+      SOC_CLAW_LOCAL_VLLM_URL: ${SOC_CLAW_LOCAL_VLLM_URL:-http://host.docker.internal:8000/v1}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+      SOC_CLAW_LOG_LEVEL: ${SOC_CLAW_LOG_LEVEL:-INFO}
+      SOC_CLAW_LOG_FILE: ${SOC_CLAW_LOG_FILE:-}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./soc_claw/benchmark/results:/app/soc_claw/benchmark/results
+    restart: unless-stopped
+
+  benchmark:
+    build: .
+    image: soc-claw:dev
+    container_name: soc-claw-benchmark
+    profiles: ["benchmark"]
+    env_file:
+      - .env
+    environment:
+      SOC_CLAW_LOCAL_VLLM_URL: ${SOC_CLAW_LOCAL_VLLM_URL:-http://host.docker.internal:8000/v1}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+      SOC_CLAW_LOG_LEVEL: ${SOC_CLAW_LOG_LEVEL:-WARNING}
+      SOC_CLAW_LOG_FILE: ${SOC_CLAW_LOG_FILE:-}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./soc_claw/benchmark/results:/app/soc_claw/benchmark/results
+    entrypoint: ["python", "-m", "soc_claw.benchmark.harness"]
+    command: ["30"]
+    restart: "no"
