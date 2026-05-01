@@ -14,12 +14,19 @@ import os
 from guard import SecurityConfig
 
 DEFAULT_WHITELIST = "127.0.0.1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
+
+# All UI assets (Tailwind CSS, Red Hat fonts, Material Symbols) are built
+# into /static at image-build time. CSP is therefore self-only — no third-
+# party origins to allow. 'unsafe-inline' stays because index.html and
+# login.html still carry small inline <script> handlers and a few inline
+# style="..." attributes; tightening to a nonce-based policy is a follow-up.
 DEFAULT_CSP = (
     "default-src 'self'; "
-    "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.tailwindcss.com; "
-    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
-    "font-src 'self' https://fonts.gstatic.com; "
+    "script-src 'self' 'unsafe-inline'; "
+    "style-src 'self' 'unsafe-inline'; "
+    "font-src 'self'; "
     "img-src 'self' data:; "
+    "connect-src 'self'; "
 )
 
 

@@ -4,58 +4,7 @@
 <meta charset="utf-8"/>
 <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
 <title>SOC-Claw | Incident Response</title>
-<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
-<link href="https://fonts.googleapis.com/css2?family=Red+Hat+Display:wght@400;600;700;900&family=Red+Hat+Mono:wght@400;500&family=Red+Hat+Text:wght@400;500;700&display=swap" rel="stylesheet"/>
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet"/>
-<script>
-tailwind.config = {
-    darkMode: "class",
-    theme: {
-        extend: {
-            colors: {
-                "primary": "#bf0100",
-                "primary-container": "#ee0000",
-                "tertiary-container": "#3e8635",
-                "surface": "#fcf9f8",
-                "on-surface": "#1c1b1b",
-                "on-surface-variant": "#5f3e39",
-                "surface-container": "#f0edec",
-                "surface-container-high": "#eae7e7",
-            },
-            fontFamily: {
-                display: ["Red Hat Display"],
-                body: ["Red Hat Text"],
-                mono: ["Red Hat Mono"],
-            }
-        }
-    }
-}
-</script>
-<style>
-.material-symbols-outlined { font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24; }
-::-webkit-scrollbar { width: 6px; }
-::-webkit-scrollbar-track { background: #1c1b1b; }
-::-webkit-scrollbar-thumb { background: #313030; border-radius: 10px; }
-.sev-p1 { background: #EE0000; }
-.sev-p2 { background: #ea580c; }
-.sev-p3 { background: #2563eb; }
-.sev-p4 { background: #16a34a; }
-.sev-text-p1 { color: #EE0000; }
-.sev-text-p2 { color: #ea580c; }
-.sev-text-p3 { color: #2563eb; }
-.sev-text-p4 { color: #16a34a; }
-.sev-border-p1 { border-left: 4px solid #EE0000; }
-.sev-border-p2 { border-left: 4px solid #ea580c; }
-.sev-border-p3 { border-left: 4px solid #2563eb; }
-.sev-border-p4 { border-left: 4px solid #16a34a; }
-.decision-confirmed { background: #16a34a; }
-.decision-adjusted { background: #ea580c; }
-.decision-flagged { background: #EE0000; }
-.fade-in { animation: fadeIn 0.3s ease-in; }
-@keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
-@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
-.loading-pulse { animation: pulse 1.5s ease-in-out infinite; }
-</style>
+<link rel="stylesheet" href="/static/tailwind.css"/>
 </head>
 <body class="bg-surface text-on-surface font-body antialiased">
 

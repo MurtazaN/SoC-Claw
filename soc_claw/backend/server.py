@@ -19,6 +19,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from guard import SecurityMiddleware
 from starlette_csrf import CSRFMiddleware
@@ -66,10 +67,16 @@ app.add_middleware(
 )
 
 TEMPLATES_DIR = Path(__file__).parent.parent / "frontend" / "templates"
+STATIC_DIR = Path(__file__).parent.parent / "frontend" / "static"
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
+
+# Self-hosted CSS, fonts, and other build artifacts (see Dockerfile stage 1).
+# Mounted under /static so the login page can fetch them before auth.
+app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 # Paths that don't require authentication
 _PUBLIC_PATHS = {"/login", "/login/", "/logout", "/logout/"}
+_PUBLIC_PREFIXES = ("/static/",)
 
 
 @app.middleware("http")
@@ -88,7 +95,8 @@ async def auth_middleware(request: Request, call_next):
     - Browser requests (non-API) get a 302 redirect to ``/login``.
     - API requests get a 401 JSON response.
     """
-    if request.url.path in _PUBLIC_PATHS:
+    path = request.url.path
+    if path in _PUBLIC_PATHS or path.startswith(_PUBLIC_PREFIXES):
         return await call_next(request)
 
     user = get_current_user(request)
@@ -110,7 +118,7 @@ async def auth_middleware(request: Request, call_next):
 # OUTERMOST at runtime — bad traffic is rejected before any session,
 # CSRF, or handler work runs. Runtime order:
 #   request → SecurityMiddleware → auth_middleware → CSRFMiddleware → handler
-# app.add_middleware(SecurityMiddleware, config=build_security_config())
+app.add_middleware(SecurityMiddleware, config=build_security_config())
 
 
 # ──────────────────────── Auth Pages ────────────────────────
