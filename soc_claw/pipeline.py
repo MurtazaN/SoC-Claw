@@ -162,18 +162,28 @@ def _classify_indicator(target: str) -> str:
     return "unknown"
 
 
-def execute_approved_action(action: dict, alert: dict = None) -> dict:
+def execute_approved_action(
+    action: dict,
+    alert: dict = None,
+    *,
+    analyst: str = "unknown",
+) -> dict:
     """Execute an approved response action.
 
-    Called by the UI when analyst clicks 'Approve' on a response plan step.
+    Called by the UI when an analyst clicks 'Approve' on a response plan step.
     Maps action_type to the corresponding function in response_tools.py.
+
+    The ``analyst`` keyword identifies who approved the action — it lands in
+    the audit log so isolation/block/escalation events can be attributed to
+    a specific user. Defaults to ``"unknown"`` for callers that don't know
+    (e.g. CLI / tests).
     """
     action_type = action.get("action_type", "")
     target = action.get("target", "")
     reasoning = action.get("reasoning", "")
     alert_id = alert.get("id", "unknown") if alert else "unknown"
 
-    log_analyst_action(alert_id, "approve", f"{action_type}: {target}")
+    log_analyst_action(alert_id, "approve", f"{action_type}: {target} (by {analyst})")
 
     if action_type == "isolate_host":
         return response_tools.isolate_host(target)

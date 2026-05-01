@@ -328,10 +328,11 @@ async def api_approve(request: Request):
     severity = body.get("severity")
     if severity:
         action["_severity"] = severity
+    analyst = getattr(request.state, "user", "unknown")
     try:
-        return execute_approved_action(action, alert)
+        return execute_approved_action(action, alert, analyst=analyst)
     except Exception as e:
-        logger.exception("api_approve failed")
+        logger.exception("api_approve failed (analyst=%s)", analyst)
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
