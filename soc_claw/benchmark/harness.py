@@ -40,68 +40,72 @@ def compute_percentile(values: list[float], p: float) -> float:
     return sorted_vals[idx]
 
 
-async def _process_alert(alert: dict) -> dict:
-    """Run one alert end-to-end.
+async def _process_alert(alert: dict, sem: asyncio.Semaphore) -> dict:
+    """Run one alert end-to-end under a pipeline-concurrency semaphore.
 
     Returns the row dict the harness aggregates. Errors are converted into
     an "ERROR" row rather than propagating, so a single bad alert doesn't
     abort the batch.
 
-    All alerts run concurrently; LLM-call concurrency is controlled by the
-    SOC_CLAW_LLM_CONCURRENCY semaphore in utils.call_llm, which keeps vLLM's
-    request queue saturated for maximum batch throughput.
+    Two-level concurrency:
+      * sem (SOC_CLAW_CONCURRENCY): caps in-flight pipelines as a resource
+        bound — memory, task contexts, enrichment thread pool. Set high
+        enough to never starve vLLM (must be >= LLM_CONCURRENCY).
+      * SOC_CLAW_LLM_CONCURRENCY (in utils.call_llm): caps in-flight LLM
+        calls so vLLM's continuous-batching queue stays saturated.
     """
     alert_id = alert["id"]
     gt = alert["ground_truth"]
-    try:
-        result = await run_pipeline(alert)
-        triage_sev = result["triage_result"].get("severity", "P3")
-        verif = result["verification_result"]
-        decision = verif.get("decision", "confirmed")
-        verified_sev = (
-            triage_sev if result["was_flagged"]
-            else result["final_verdict"].get("verified_severity", triage_sev)
-        )
-        resp = result.get("response_plan", {}) or {}
-        plan_steps = resp.get("response_plan", []) if isinstance(resp, dict) else []
-        return {
-            "alert_id": alert_id,
-            "ground_truth_severity": gt["severity"],
-            "triage_severity": triage_sev,
-            "verified_severity": verified_sev,
-            "verification_decision": decision,
-            "triage_correct": triage_sev == gt["severity"],
-            "verified_correct": verified_sev == gt["severity"],
-            "triage_latency_ms": result["timing"]["triage_ms"],
-            "verification_latency_ms": result["timing"]["verification_ms"],
-            "response_latency_ms": result["timing"].get("response_ms", 0),
-            "e2e_latency_ms": result["timing"]["total_ms"],
-            "triage_confidence": result["triage_result"].get("confidence", 0),
-            "verification_confidence": verif.get("confidence_in_verification", 0),
-            "num_tool_calls": len(result["triage_result"].get("_tool_calls", [])),
-            "num_response_steps": len(plan_steps),
-            "num_approval_required": sum(1 for s in plan_steps if s.get("requires_approval")),
-        }
-    except Exception as e:
-        print(f"ERROR on {alert_id}: {e}")
-        return {
-            "alert_id": alert_id,
-            "ground_truth_severity": gt["severity"],
-            "triage_severity": "ERROR",
-            "verified_severity": "ERROR",
-            "verification_decision": "error",
-            "triage_correct": False,
-            "verified_correct": False,
-            "triage_latency_ms": 0,
-            "verification_latency_ms": 0,
-            "response_latency_ms": 0,
-            "e2e_latency_ms": 0,
-            "triage_confidence": 0,
-            "verification_confidence": 0,
-            "num_tool_calls": 0,
-            "num_response_steps": 0,
-            "num_approval_required": 0,
-        }
+    async with sem:
+        try:
+            result = await run_pipeline(alert)
+            triage_sev = result["triage_result"].get("severity", "P3")
+            verif = result["verification_result"]
+            decision = verif.get("decision", "confirmed")
+            verified_sev = (
+                triage_sev if result["was_flagged"]
+                else result["final_verdict"].get("verified_severity", triage_sev)
+            )
+            resp = result.get("response_plan", {}) or {}
+            plan_steps = resp.get("response_plan", []) if isinstance(resp, dict) else []
+            return {
+                "alert_id": alert_id,
+                "ground_truth_severity": gt["severity"],
+                "triage_severity": triage_sev,
+                "verified_severity": verified_sev,
+                "verification_decision": decision,
+                "triage_correct": triage_sev == gt["severity"],
+                "verified_correct": verified_sev == gt["severity"],
+                "triage_latency_ms": result["timing"]["triage_ms"],
+                "verification_latency_ms": result["timing"]["verification_ms"],
+                "response_latency_ms": result["timing"].get("response_ms", 0),
+                "e2e_latency_ms": result["timing"]["total_ms"],
+                "triage_confidence": result["triage_result"].get("confidence", 0),
+                "verification_confidence": verif.get("confidence_in_verification", 0),
+                "num_tool_calls": len(result["triage_result"].get("_tool_calls", [])),
+                "num_response_steps": len(plan_steps),
+                "num_approval_required": sum(1 for s in plan_steps if s.get("requires_approval")),
+            }
+        except Exception as e:
+            print(f"ERROR on {alert_id}: {e}")
+            return {
+                "alert_id": alert_id,
+                "ground_truth_severity": gt["severity"],
+                "triage_severity": "ERROR",
+                "verified_severity": "ERROR",
+                "verification_decision": "error",
+                "triage_correct": False,
+                "verified_correct": False,
+                "triage_latency_ms": 0,
+                "verification_latency_ms": 0,
+                "response_latency_ms": 0,
+                "e2e_latency_ms": 0,
+                "triage_confidence": 0,
+                "verification_confidence": 0,
+                "num_tool_calls": 0,
+                "num_response_steps": 0,
+                "num_approval_required": 0,
+            }
 
 
 def _decision_suffix(decision: str) -> str:
@@ -290,29 +294,44 @@ def _save_csv(results: list[dict]) -> Path | None:
 async def run_benchmark(max_alerts: int = 30) -> dict:
     """Run the full benchmark across all alerts.
 
-    All alerts are dispatched concurrently. Throughput is controlled by the
-    SOC_CLAW_LLM_CONCURRENCY semaphore inside ``utils.call_llm`` (default 10),
-    which limits how many LLM API calls are in-flight to vLLM at once. vLLM's
-    continuous-batching scheduler receives a full queue at all times, yielding
-    near-linear speedup over sequential processing.
+    Two concurrency knobs, both floored at 1:
 
-    Output ordering is by completion time, not alert ID; the final CSV is
-    sorted by alert_id at the end so it stays stable across runs.
+      SOC_CLAW_CONCURRENCY (default 50)
+          Caps in-flight pipelines as a resource bound — protects against
+          spawning thousands of task contexts, enrichment threads, and
+          per-alert dict allocations when batches grow large.
 
-    Tune SOC_CLAW_LLM_CONCURRENCY to match your vLLM instance's
-    ``--max-num-seqs`` setting for maximum GPU utilisation.
+      SOC_CLAW_LLM_CONCURRENCY (default 10, enforced inside utils.call_llm)
+          Caps simultaneous LLM API calls so vLLM's continuous-batching
+          queue stays saturated without overwhelming GPU memory.
+
+    For correct vLLM utilisation, SOC_CLAW_CONCURRENCY must be >=
+    SOC_CLAW_LLM_CONCURRENCY; otherwise the LLM semaphore can never reach
+    its capacity. Output ordering is by completion time; the final CSV is
+    sorted by alert_id for stability across runs.
     """
     alerts = load_alerts()[:max_alerts]
     n_total = len(alerts)
-    llm_concurrency = int(os.environ.get("SOC_CLAW_LLM_CONCURRENCY", "10"))
+    llm_concurrency = max(1, int(os.environ.get("SOC_CLAW_LLM_CONCURRENCY", "10")))
+    pipeline_concurrency = max(1, int(os.environ.get("SOC_CLAW_CONCURRENCY", "50")))
+    if pipeline_concurrency < llm_concurrency:
+        print(
+            f"WARNING: SOC_CLAW_CONCURRENCY ({pipeline_concurrency}) < "
+            f"SOC_CLAW_LLM_CONCURRENCY ({llm_concurrency}); "
+            f"vLLM batching will be starved."
+        )
 
     print(f"\n{'='*70}")
-    print(f"SOC-Claw Benchmark — {n_total} alerts (llm_concurrency={llm_concurrency})")
+    print(
+        f"SOC-Claw Benchmark — {n_total} alerts "
+        f"(pipeline={pipeline_concurrency}, llm={llm_concurrency})"
+    )
     print(f"{'='*70}\n")
 
+    sem = asyncio.Semaphore(pipeline_concurrency)
     total_start = time.perf_counter()
 
-    tasks = [asyncio.create_task(_process_alert(a)) for a in alerts]
+    tasks = [asyncio.create_task(_process_alert(a, sem)) for a in alerts]
     results: list[dict] = []
     completed = 0
     for fut in asyncio.as_completed(tasks):
