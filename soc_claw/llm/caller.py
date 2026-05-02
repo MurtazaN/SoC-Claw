@@ -11,7 +11,8 @@ from typing import NamedTuple
 from soc_claw.audit import log_inference, log_routing_decision
 from soc_claw.llm.client import select_endpoint, guided_json_kwargs
 from soc_claw.llm.json_extract import extract_json
-
+import logging
+logger = logging.getLogger("soc-claw.llm.caller")
 
 class LLMResult(NamedTuple):
     result: dict
@@ -21,18 +22,19 @@ class LLMResult(NamedTuple):
 
 
 def _parse_llm_output(schema_class, content: str) -> dict | None:
-    """Attempt Pydantic-validated parse, then regex fallback.
-
-    Returns the validated dict on success, or ``None`` on any failure.
-    """
     try:
         return schema_class.model_validate_json(content).model_dump()
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning("direct JSON parse failed for %s: %s", schema_class.__name__, e)
     try:
         return schema_class.model_validate(extract_json(content)).model_dump()
-    except Exception:
+    except Exception as e:
+        logger.warning(
+            "extract_json+validate failed for %s: %s | content head: %s",
+            schema_class.__name__, e, content[:300],
+        )
         return None
+
 
 
 async def call_llm(

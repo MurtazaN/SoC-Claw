@@ -34,16 +34,16 @@ agents:
 # Per-content overrides (matched in order; first match wins; 
 #  falls back to the agent default above).
 
-content_routes:
-  - when: "(payload|command_line|raw_log)"
-    provider: ollama-from-container
-    model: mistral:7b-instruct
-  - when: "(employee|user_id|email)"
-    provider: ollama-from-container
-    model: mistral:7b-instruct
-  - when: "MITRE|threat actor|TTP"
-    provider: ollama-from-container
-    model: deepseek-coder:6.7b-instruct
+content_routes: []
+  # - when: "(payload|command_line|raw_log)"
+  #   provider: ollama-from-container
+  #   model: mistral:7b-instruct
+  # - when: "(employee|user_id|email)"
+  #   provider: ollama-from-container
+  #   model: mistral:7b-instruct
+  # - when: "MITRE|threat actor|TTP"
+  #   provider: ollama-from-container
+  #   model: deepseek-coder:6.7b-instruct
 
 # Demo override — wins over everything when set.
 force:

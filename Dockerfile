@@ -60,7 +60,6 @@ RUN uv pip install --system --no-cache --no-deps -e . \
 USER app
 
 ENV PYTHONUNBUFFERED=1 \
-    SOC_CLAW_MODEL=nvidia/Nemotron-Mini-4B-Instruct \
     BENCHMARK_OUTPUT_DIR=/app/soc_claw/benchmark/results
 
 EXPOSE 7860
