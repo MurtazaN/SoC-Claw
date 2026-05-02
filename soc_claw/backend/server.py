@@ -48,7 +48,7 @@ from soc_claw.pipeline import (  # noqa: E402
     load_alerts,
     get_alert_by_id,
 )
-from soc_claw.utils import log_analyst_action  # noqa: E402
+from soc_claw.audit import log_analyst_action  # noqa: E402
 
 logger = logging.getLogger("soc-claw.server")
 

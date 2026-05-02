@@ -35,7 +35,7 @@ from soc_claw.agents.verifier_agent import run_verification
 from soc_claw.agents.response_agent import run_response
 from soc_claw.telemetry import get_tracer
 from soc_claw.tools import response_tools
-from soc_claw.utils import log_analyst_action
+from soc_claw.audit import log_analyst_action
 
 logger = logging.getLogger("soc-claw.pipeline")
 
@@ -182,6 +182,33 @@ def _classify_indicator(target: str) -> str:
     return "unknown"
 
 
+def _handle_create_ticket(action, alert, **kwargs):
+    priority_map = {"P1": "critical", "P2": "high", "P3": "medium", "P4": "low"}
+    severity = action.get("_severity", "P3")
+    priority = priority_map.get(severity, "medium")
+    alert_id = alert.get("id", "unknown") if alert else "unknown"
+    target = action.get("target", "")
+    summary = f"[{alert_id}] {action.get('action', target)}"
+    return response_tools.create_ticket(summary, priority)
+
+
+def _handle_escalate(action, alert, **kwargs):
+    target = action.get("target", "")
+    reasoning = action.get("reasoning", "")
+    tier = 3 if "3" in str(target) or "IR" in str(target) else 2
+    return response_tools.escalate(tier, reasoning)
+
+
+_ACTION_DISPATCH = {
+    "isolate_host": lambda action, alert, **kw: response_tools.isolate_host(action.get("target", "")),
+    "block_ioc": lambda action, alert, **kw: response_tools.block_ioc(
+        action.get("target", ""), _classify_indicator(action.get("target", ""))
+    ),
+    "create_ticket": _handle_create_ticket,
+    "escalate": _handle_escalate,
+}
+
+
 def execute_approved_action(
     action: dict,
     alert: dict = None,
@@ -200,32 +227,21 @@ def execute_approved_action(
     """
     action_type = action.get("action_type", "")
     target = action.get("target", "")
-    reasoning = action.get("reasoning", "")
     alert_id = alert.get("id", "unknown") if alert else "unknown"
 
     log_analyst_action(alert_id, "approve", f"{action_type}: {target} (by {analyst})")
 
-    if action_type == "isolate_host":
-        return response_tools.isolate_host(target)
-    elif action_type == "block_ioc":
-        return response_tools.block_ioc(target, _classify_indicator(target))
-    elif action_type == "create_ticket":
-        priority_map = {"P1": "critical", "P2": "high", "P3": "medium", "P4": "low"}
-        severity = action.get("_severity", "P3")
-        priority = priority_map.get(severity, "medium")
-        summary = f"[{alert_id}] {action.get('action', target)}"
-        return response_tools.create_ticket(summary, priority)
-    elif action_type == "escalate":
-        tier = 3 if "3" in str(target) or "IR" in str(target) else 2
-        return response_tools.escalate(tier, reasoning)
-    else:
-        # Log-only actions: collect_forensics, add_to_watchlist, notify_owner, tune_rule
-        return {
-            "status": "logged",
-            "action": action_type,
-            "target": target,
-            "note": f"Action '{action_type}' logged. Requires manual execution outside SOC-Claw.",
-        }
+    handler = _ACTION_DISPATCH.get(action_type)
+    if handler:
+        return handler(action, alert, analyst=analyst)
+
+    # Log-only actions: collect_forensics, add_to_watchlist, notify_owner, tune_rule
+    return {
+        "status": "logged",
+        "action": action_type,
+        "target": target,
+        "note": f"Action '{action_type}' logged. Requires manual execution outside SOC-Claw.",
+    }
 
 
 def load_alerts() -> list[dict]:

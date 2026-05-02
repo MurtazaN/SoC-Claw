@@ -4,6 +4,8 @@ import re
 from functools import lru_cache
 from pathlib import Path
 
+from soc_claw.tools.registry import register
+
 DATA_DIR = Path(__file__).parent.parent / "data"
 _logger = logging.getLogger("soc-claw.tools.mitre_lookup")
 
@@ -46,6 +48,20 @@ def mitre_lookup(behavior: str) -> list[dict]:
 
     matches.sort(key=lambda x: x["match_score"], reverse=True)
     return matches[:3]
+
+
+class MitreLookupTool:
+    name = "mitre_lookup"
+    description = "Maps observed behavior (rules, payloads) to MITRE ATT&CK techniques with descriptions and tactics."
+
+    def run(self, alert: dict) -> list[dict]:
+        behavior = f"{alert.get('rule_name', '')} {alert.get('payload', '')}".strip()
+        if not behavior:
+            return []
+        return mitre_lookup(behavior)
+
+
+register(MitreLookupTool())
 
 
 if __name__ == "__main__":

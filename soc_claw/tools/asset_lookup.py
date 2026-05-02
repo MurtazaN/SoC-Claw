@@ -3,6 +3,8 @@ import logging
 from functools import lru_cache
 from pathlib import Path
 
+from soc_claw.tools.registry import register
+
 DATA_DIR = Path(__file__).parent.parent / "data"
 _logger = logging.getLogger("soc-claw.tools.asset_lookup")
 
@@ -43,6 +45,20 @@ def asset_lookup(hostname: str) -> dict:
         "found": False,
         "note": "Unknown asset - defaulting to medium criticality",
     }
+
+
+class AssetLookupTool:
+    name = "asset_lookup"
+    description = "Provides CMDB asset inventory details including criticality, owner, and business function for hostnames."
+
+    def run(self, alert: dict) -> dict:
+        hostname = alert.get("hostname", "")
+        if not hostname:
+            return {}
+        return asset_lookup(hostname)
+
+
+register(AssetLookupTool())
 
 
 if __name__ == "__main__":

@@ -3,6 +3,8 @@ import logging
 from functools import lru_cache
 from pathlib import Path
 
+from soc_claw.tools.registry import register
+
 DATA_DIR = Path(__file__).parent.parent / "data"
 _logger = logging.getLogger("soc-claw.tools.ip_reputation")
 
@@ -57,6 +59,26 @@ def ip_reputation(ip: str) -> dict:
         "last_seen": None,
         "verdict": "unknown",
     }
+
+
+class IPReputationTool:
+    name = "ip_reputation"
+    description = "Provides threat intelligence scores, tags, and known campaigns for IP addresses."
+
+    def run(self, alert: dict) -> dict:
+        results = {}
+        dest_ip = alert.get("dest_ip")
+        if dest_ip:
+            results["dest_ip"] = ip_reputation(dest_ip)
+            
+        source_ip = alert.get("source_ip")
+        if source_ip and not source_ip.startswith("10.") and not source_ip.startswith("192.168."):
+            results["source_ip"] = ip_reputation(source_ip)
+            
+        return results
+
+
+register(IPReputationTool())
 
 
 if __name__ == "__main__":
