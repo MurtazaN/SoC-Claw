@@ -146,4 +146,8 @@ docker compose up --build
 
 # 4. Open http://localhost:7860
 
+# 5. Login with your credentials
+# For Demo use: analyst / analyst
+
 ```
+For Reference - https://www.exabeam.com/explainers/siem/ai-siem-how-siem-with-ai-ml-is-revolutionizing-the-soc/#:~:text=automatically%20trigger%20alerts%2C%20implement%20predefined,even%20orchestrate%20complex%20response%20workflows
