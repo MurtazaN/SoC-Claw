@@ -22,10 +22,10 @@ providers:
 # Per-agent default assignment.
 agents:
   triage:
-    provider: ollama
+    provider: ollama-from-container
     model: mistral:7b-instruct                 # tool-using; mistral is solid
   verifier:
-    provider: ollama
+    provider: ollama-from-container
     model: phi4-mini:3.8b                      # reasoning; phi-4 punches up
   response:
     provider: openrouter
@@ -36,19 +36,19 @@ agents:
 
 content_routes:
   - when: "(payload|command_line|raw_log)"
-    provider: vllm-local                       # sensitive payloads stay local
-    model: nvidia/Nemotron-Mini-4B-Instruct
+    provider: ollama-from-container
+    model: mistral:7b-instruct
   - when: "(employee|user_id|email)"
-    provider: vllm-local
-    model: nvidia/Nemotron-Mini-4B-Instruct
+    provider: ollama-from-container
+    model: mistral:7b-instruct
   - when: "MITRE|threat actor|TTP"
-    provider: hf
-    model: fdtn-ai/Foundation-Sec-8B-Reasoning
+    provider: ollama-from-container
+    model: deepseek-coder:6.7b-instruct
 
 # Demo override — wins over everything when set.
 force:
-  provider: ollama-from-container    # set null to disable
-  model: mistral:7b-instruct       # set null to disable
+  provider: null    # set null to disable
+  model: null       # set null to disable
 
 logging:
   log_every_decision: true

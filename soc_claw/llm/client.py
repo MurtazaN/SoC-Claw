@@ -60,11 +60,15 @@ def select_endpoint(agent: str, prompt: str) -> tuple[AsyncOpenAI, str, str]:
 
 
 def guided_json_kwargs(schema_class, provider: str) -> dict:
-    """Build ``extra_body`` kwargs for vLLM guided-JSON decoding.
+    """Build kwargs for JSON decoding based on the provider capabilities.
 
-    Only applies when the provider is a local vLLM instance.
-    Cloud endpoints don't support the ``guided_json`` extension.
+    vLLM supports strict `guided_json` schema enforcement.
+    Ollama supports basic JSON mode.
+    OpenRouter/Cloud endpoints usually don't support extra_body schemas natively in the same way,
+    so we return empty or just JSON mode depending on the endpoint.
     """
-    if "vllm" not in provider:
-        return {}
-    return {"extra_body": {"guided_json": schema_class.model_json_schema()}}
+    if "vllm" in provider:
+        return {"extra_body": {"guided_json": schema_class.model_json_schema()}}
+    elif "ollama" in provider:
+        return {"response_format": {"type": "json_object"}}
+    return {}
