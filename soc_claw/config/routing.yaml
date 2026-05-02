@@ -1,0 +1,55 @@
+# Inference Routing Policy
+# Determines which inference requests stay local vs go to cloud
+
+# Named providers — base URLs and which env var holds the bearer.
+providers:
+  ollama:
+    base_url: http://localhost:11434/v1
+    api_key_env: "dummy-key"                       # Ollama doesn't need one
+  ollama-from-container:
+    base_url: http://host.docker.internal:11434/v1
+    api_key_env: "dummy-key"                       
+  vllm-local:
+    base_url: http://localhost:8000/v1
+    api_key_env: "dummy-key"                       # vLLM doesn't need one 
+  openrouter:
+    base_url: https://openrouter.ai/api/v1
+    api_key_env: OPENROUTER_API_KEY
+  hf:
+    base_url: https://api-inference.huggingface.co/models/fdtn-ai/Foundation-Sec-8B-Reasoning
+    api_key_env: HUGGING_FACE_TOKEN
+
+# Per-agent default assignment.
+agents:
+  triage:
+    provider: ollama
+    model: mistral:7b-instruct                 # tool-using; mistral is solid
+  verifier:
+    provider: ollama
+    model: phi4-mini:3.8b                      # reasoning; phi-4 punches up
+  response:
+    provider: openrouter
+    model: nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free
+
+# Per-content overrides (matched in order; first match wins; 
+#  falls back to the agent default above).
+
+content_routes:
+  - when: "(payload|command_line|raw_log)"
+    provider: vllm-local                       # sensitive payloads stay local
+    model: nvidia/Nemotron-Mini-4B-Instruct
+  - when: "(employee|user_id|email)"
+    provider: vllm-local
+    model: nvidia/Nemotron-Mini-4B-Instruct
+  - when: "MITRE|threat actor|TTP"
+    provider: hf
+    model: fdtn-ai/Foundation-Sec-8B-Reasoning
+
+# Demo override — wins over everything when set.
+force:
+  provider: ollama-from-container    # set null to disable
+  model: mistral:7b-instruct       # set null to disable
+
+logging:
+  log_every_decision: true
+  format: "{timestamp} | {route} | {reason} | {prompt_hash}"
