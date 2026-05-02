@@ -1,9 +1,7 @@
 import json
 
-from soc_claw.utils import (
-    log_response_plan,
-    call_llm,
-)
+from soc_claw.audit import log_response_plan
+from soc_claw.llm import call_llm
 from soc_claw.schemas import ResponsePlan
 
 SYSTEM_PROMPT = """You are a SOC incident responder. You receive a triaged and VERIFIED security alert with a final severity score, enrichment context, and verification status. Your job is to produce a prioritized response plan with specific next steps for the analyst to review and approve.

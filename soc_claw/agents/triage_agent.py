@@ -1,16 +1,15 @@
 import json
 import time
 
-from soc_claw.utils import (
-    log_tool_call,
-    call_llm,
-)
+from soc_claw.audit import log_tool_call
+from soc_claw.llm import call_llm
 from soc_claw.schemas import TriageVerdict
-from soc_claw.tools.ip_reputation import ip_reputation
-from soc_claw.tools.mitre_lookup import mitre_lookup
-from soc_claw.tools.asset_lookup import asset_lookup
+from soc_claw.tools import registry
 
-SYSTEM_PROMPT = """You are a SOC Tier 2 security analyst performing alert triage. You are given a raw security alert along with pre-gathered enrichment data from three sources: IP reputation, asset inventory, and MITRE ATT&CK technique mapping.
+SYSTEM_PROMPT = """You are a SOC Tier 2 security analyst performing alert triage. You are given a raw security alert along with pre-gathered enrichment data.
+
+Available enrichment sources:
+{tool_descriptions}
 
 Analyze the alert and enrichment data, then follow this workflow:
 
@@ -47,12 +46,10 @@ _RETRY_HINT = (
 )
 
 
-async def _run_enrichment(alert: dict) -> tuple[dict, dict, list, list, dict | None]:
-    """Run all enrichment tools concurrently on an alert.
+async def _run_enrichment(alert: dict) -> tuple[dict, list]:
+    """Run all registered enrichment tools concurrently on an alert.
 
-    Returns (ip_result, asset_result, mitre_results, tool_calls_log, source_ip_result).
-    Tools run via ``asyncio.to_thread`` so they don't block the event
-    loop and latencies don't stack when tools become real API calls.
+    Returns (enrichment_dict, tool_calls_log).
     """
     import asyncio
 
@@ -60,62 +57,33 @@ async def _run_enrichment(alert: dict) -> tuple[dict, dict, list, list, dict | N
     tracer = get_tracer()
 
     tool_calls_log = []
+    enrichment = {}
+    tools = registry.get_all()
 
-    dest_ip = alert.get("dest_ip", "")
-    source_ip = alert.get("source_ip", "")
-    hostname = alert.get("hostname", "")
-    behavior = f"{alert.get('rule_name', '')} {alert.get('payload', '')}"
-
-    # Run the three core lookups concurrently
-    async def _timed(name, func, *args):
+    async def _timed(tool):
         start = time.perf_counter()
-        result = await asyncio.to_thread(func, *args)
+        result = await asyncio.to_thread(tool.run, alert)
         elapsed = int((time.perf_counter() - start) * 1000)
-        return name, args, result, elapsed
+        return tool.name, result, elapsed
 
     with tracer.start_as_current_span(
         "enrichment.run",
         attributes={"alert.id": alert.get("id", "")},
     ) as span:
-        tasks = [
-            _timed("ip_reputation", ip_reputation, dest_ip),
-            _timed("asset_lookup", asset_lookup, hostname),
-            _timed("mitre_lookup", mitre_lookup, behavior),
-        ]
+        span.set_attribute("tools_run", len(tools))
+        
+        if not tools:
+            return enrichment, tool_calls_log
 
-        # Optionally check source IP if it's external
-        check_source = (
-            source_ip
-            and not source_ip.startswith("10.")
-            and not source_ip.startswith("192.168.")
-        )
-        if check_source:
-            tasks.append(_timed("ip_reputation", ip_reputation, source_ip))
-
-        span.set_attribute("tools_run", len(tasks))
+        tasks = [_timed(t) for t in tools]
         results = await asyncio.gather(*tasks)
 
-    # Unpack results in known order
-    ip_name, ip_args, ip_result, ip_ms = results[0]
-    asset_name, asset_args, asset_result, asset_ms = results[1]
-    mitre_name, mitre_args, mitre_results, mitre_ms = results[2]
+    for name, result, ms in results:
+        enrichment[name] = result
+        log_tool_call(name, {"alert_id": alert.get("id", "")}, result, ms)
+        tool_calls_log.append({"tool": name, "output": result})
 
-    log_tool_call("ip_reputation", {"ip": dest_ip}, ip_result, ip_ms)
-    tool_calls_log.append({"tool": "ip_reputation", "input": {"ip": dest_ip}, "output": ip_result})
-
-    log_tool_call("asset_lookup", {"hostname": hostname}, asset_result, asset_ms)
-    tool_calls_log.append({"tool": "asset_lookup", "input": {"hostname": hostname}, "output": asset_result})
-
-    log_tool_call("mitre_lookup", {"behavior": behavior[:200]}, mitre_results, mitre_ms)
-    tool_calls_log.append({"tool": "mitre_lookup", "input": {"behavior": behavior[:200]}, "output": mitre_results})
-
-    source_ip_result = None
-    if check_source:
-        _, _, source_ip_result, src_ms = results[3]
-        log_tool_call("ip_reputation", {"ip": source_ip}, source_ip_result, src_ms)
-        tool_calls_log.append({"tool": "ip_reputation", "input": {"ip": source_ip}, "output": source_ip_result})
-
-    return ip_result, asset_result, mitre_results, tool_calls_log, source_ip_result
+    return enrichment, tool_calls_log
 
 
 async def run_triage(alert: dict, steering_context: str = None) -> dict:
@@ -125,19 +93,14 @@ async def run_triage(alert: dict, steering_context: str = None) -> dict:
     for analysis and severity scoring.
     """
     # Step 1: Run enrichment tools directly
-    ip_result, asset_result, mitre_results, tool_calls_log, source_ip_result = await _run_enrichment(alert)
+    enrichment, tool_calls_log = await _run_enrichment(alert)
 
     # Step 2: Build enriched prompt for the LLM
     alert_json = json.dumps(alert, indent=2)
-    enrichment = {
-        "dest_ip_reputation": ip_result,
-        "asset_info": asset_result,
-        "mitre_techniques": mitre_results,
-    }
-    if source_ip_result:
-        enrichment["source_ip_reputation"] = source_ip_result
-
     enrichment_json = json.dumps(enrichment, indent=2)
+
+    tool_descriptions = "\n".join(f"- {t.name}: {t.description}" for t in registry.get_all())
+    system_prompt = SYSTEM_PROMPT.replace("{tool_descriptions}", tool_descriptions)
 
     if steering_context:
         user_content = (
@@ -154,23 +117,27 @@ async def run_triage(alert: dict, steering_context: str = None) -> dict:
     # Step 3: LLM call via shared scaffold
     def _default():
         severity = "P3"
-        if ip_result.get("verdict") == "malicious" and asset_result.get("criticality") in ("critical", "high"):
+        ip_res = enrichment.get("ip_reputation", {}).get("dest_ip", {})
+        asset_res = enrichment.get("asset_lookup", {})
+        mitre_res = enrichment.get("mitre_lookup", [])
+
+        if ip_res.get("verdict") == "malicious" and asset_res.get("criticality") in ("critical", "high"):
             severity = "P1"
-        elif ip_result.get("verdict") == "malicious":
+        elif ip_res.get("verdict") == "malicious":
             severity = "P2"
         return {
             "severity": severity,
             "confidence": 30,
             "reasoning": "Failed to parse LLM response. Severity estimated from enrichment data.",
-            "mitre_techniques": [m.get("technique_id", "") for m in mitre_results],
-            "iocs_found": [{"indicator": alert.get("dest_ip", ""), "type": "ip", "threat_score": ip_result.get("threat_score", 0)}] if ip_result.get("threat_score", 0) > 0 else [],
-            "asset_criticality": asset_result.get("criticality", "medium"),
+            "mitre_techniques": [m.get("technique_id", "") for m in mitre_res],
+            "iocs_found": [{"indicator": alert.get("dest_ip", ""), "type": "ip", "threat_score": ip_res.get("threat_score", 0)}] if ip_res.get("threat_score", 0) > 0 else [],
+            "asset_criticality": asset_res.get("criticality", "medium"),
             "recommended_urgency": "immediate" if severity == "P1" else "urgent" if severity == "P2" else "standard",
         }
 
     verdict, inference_ms, route, content = await call_llm(
         agent_name="triage",
-        system_prompt=SYSTEM_PROMPT,
+        system_prompt=system_prompt,
         user_content=user_content,
         schema_class=TriageVerdict,
         retry_hint=_RETRY_HINT,
@@ -178,6 +145,6 @@ async def run_triage(alert: dict, steering_context: str = None) -> dict:
     )
 
     # Attach enrichment metadata (triage-specific)
-    verdict["_tool_calls"] = tool_calls_log
+    verdict.setdefault("_meta", {})["tool_calls"] = tool_calls_log
 
     return verdict

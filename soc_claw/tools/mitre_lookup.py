@@ -4,30 +4,26 @@ import re
 from functools import lru_cache
 from pathlib import Path
 
+from soc_claw.tools.registry import register
+
 DATA_DIR = Path(__file__).parent.parent / "data"
 _logger = logging.getLogger("soc-claw.tools.mitre_lookup")
 
 
+from soc_claw.utils import load_validated_json
+
 @lru_cache(maxsize=1)
-def _load_mitre_techniques() -> tuple:
+def _load_mitre_techniques(data_dir: Path | None = None) -> tuple:
     """Load and validate MITRE techniques. Cached after first call."""
     from soc_claw.schemas import MitreTechnique
 
-    with open(DATA_DIR / "mitre_techniques.json") as f:
-        raw = json.load(f)
-    validated = []
-    for i, item in enumerate(raw):
-        try:
-            tech = MitreTechnique.model_validate(item)
-            validated.append(tech.model_dump())
-        except Exception as exc:
-            _logger.warning("Skipping invalid mitre_technique at index %d: %s", i, exc)
-    return tuple(validated)
+    directory = data_dir or DATA_DIR
+    return load_validated_json(directory / "mitre_techniques.json", MitreTechnique, _logger)
 
 
-def mitre_lookup(behavior: str) -> list[dict]:
+def mitre_lookup(behavior: str, data_dir: Path | None = None) -> list[dict]:
     """Map observed behavior description to MITRE ATT&CK techniques."""
-    techniques = _load_mitre_techniques()
+    techniques = _load_mitre_techniques(data_dir)
     behavior_tokens = set(re.findall(r"[a-z0-9.]+", behavior.lower()))
 
     matches = []
@@ -48,24 +44,20 @@ def mitre_lookup(behavior: str) -> list[dict]:
     return matches[:3]
 
 
-if __name__ == "__main__":
-    # Test PowerShell behavior
-    result = mitre_lookup("powershell encoded command downloading payload from external IP")
-    print(f"PowerShell behavior: {[r['technique_id'] for r in result]}")
-    assert any(r["technique_id"] == "T1059.001" for r in result)
+class MitreLookupTool:
+    name = "mitre_lookup"
+    description = "Maps observed behavior (rules, payloads) to MITRE ATT&CK techniques with descriptions and tactics."
 
-    # Test brute force
-    result = mitre_lookup("brute force failed login authentication attempts password guessing")
-    print(f"Brute force: {[r['technique_id'] for r in result]}")
-    assert any(r["technique_id"] == "T1110.001" for r in result)
+    def __init__(self, data_dir: Path | None = None):
+        self.data_dir = data_dir
 
-    # Test no match
-    result = mitre_lookup("normal web browsing activity on corporate laptop")
-    print(f"Normal activity: {result}")
+    def run(self, alert: dict) -> list[dict]:
+        behavior = f"{alert.get('rule_name', '')} {alert.get('payload', '')}".strip()
+        if not behavior:
+            return []
+        return mitre_lookup(behavior, self.data_dir)
 
-    # Test DNS tunneling
-    result = mitre_lookup("dns tunneling query subdomain exfil covert channel")
-    print(f"DNS tunneling: {[r['technique_id'] for r in result]}")
-    assert any(r["technique_id"] == "T1071.004" for r in result)
 
-    print("\nAll mitre_lookup tests passed!")
+register(MitreLookupTool())
+
+

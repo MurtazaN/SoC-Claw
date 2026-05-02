@@ -3,30 +3,26 @@ import logging
 from functools import lru_cache
 from pathlib import Path
 
+from soc_claw.tools.registry import register
+
 DATA_DIR = Path(__file__).parent.parent / "data"
 _logger = logging.getLogger("soc-claw.tools.asset_lookup")
 
 
+from soc_claw.utils import load_validated_json
+
 @lru_cache(maxsize=1)
-def _load_asset_inventory() -> tuple:
+def _load_asset_inventory(data_dir: Path | None = None) -> tuple:
     """Load and validate asset inventory. Cached after first call."""
     from soc_claw.schemas import Asset
 
-    with open(DATA_DIR / "asset_inventory.json") as f:
-        raw = json.load(f)
-    validated = []
-    for i, item in enumerate(raw):
-        try:
-            asset = Asset.model_validate(item)
-            validated.append(asset.model_dump())
-        except Exception as exc:
-            _logger.warning("Skipping invalid asset entry at index %d: %s", i, exc)
-    return tuple(validated)
+    directory = data_dir or DATA_DIR
+    return load_validated_json(directory / "asset_inventory.json", Asset, _logger)
 
 
-def asset_lookup(hostname: str) -> dict:
+def asset_lookup(hostname: str, data_dir: Path | None = None) -> dict:
     """Retrieve asset information from CMDB/inventory."""
-    inventory = _load_asset_inventory()
+    inventory = _load_asset_inventory(data_dir)
 
     for asset in inventory:
         if asset["hostname"].upper() == hostname.upper():
@@ -45,22 +41,20 @@ def asset_lookup(hostname: str) -> dict:
     }
 
 
-if __name__ == "__main__":
-    # Test known hostname
-    result = asset_lookup("DC-FINANCE-01")
-    print(f"Known host: {result}")
-    assert result["found"] is True
-    assert result["criticality"] == "critical"
+class AssetLookupTool:
+    name = "asset_lookup"
+    description = "Provides CMDB asset inventory details including criticality, owner, and business function for hostnames."
 
-    # Test case-insensitive
-    result = asset_lookup("dc-finance-01")
-    print(f"Case-insensitive: {result}")
-    assert result["found"] is True
+    def __init__(self, data_dir: Path | None = None):
+        self.data_dir = data_dir
 
-    # Test unknown hostname
-    result = asset_lookup("UNKNOWN-HOST-999")
-    print(f"Unknown host: {result}")
-    assert result["found"] is False
-    assert result["criticality"] == "medium"
+    def run(self, alert: dict) -> dict:
+        hostname = alert.get("hostname", "")
+        if not hostname:
+            return {}
+        return asset_lookup(hostname, self.data_dir)
 
-    print("\nAll asset_lookup tests passed!")
+
+register(AssetLookupTool())
+
+

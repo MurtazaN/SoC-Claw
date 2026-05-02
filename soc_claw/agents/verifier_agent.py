@@ -1,9 +1,7 @@
 import json
 
-from soc_claw.utils import (
-    log_verification,
-    call_llm,
-)
+from soc_claw.audit import log_verification
+from soc_claw.llm import call_llm
 from soc_claw.schemas import VerificationDecision
 
 SYSTEM_PROMPT = """You are a senior SOC analyst performing quality assurance on alert triage decisions. You receive a raw security alert AND the Triage Agent's verdict (severity, confidence, reasoning, enrichment data).

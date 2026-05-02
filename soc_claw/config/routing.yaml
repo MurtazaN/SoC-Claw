@@ -1,0 +1,61 @@
+# Inference Routing Policy
+# Determines which inference requests stay local vs go to cloud
+
+# Named providers — base URLs and which env var holds the bearer.
+providers:
+  ollama:
+    base_url: http://localhost:11434/v1
+    api_key_env: "dummy-key"                       # Ollama doesn't need one
+  ollama-from-container:
+    base_url: http://host.docker.internal:11434/v1
+    api_key_env: "dummy-key"                       
+  vllm-local:
+    base_url: http://localhost:8000/v1
+    api_key_env: "dummy-key"                       # vLLM doesn't need one 
+  openrouter:
+    base_url: https://openrouter.ai/api/v1
+    api_key_env: OPENROUTER_API_KEY
+  hugging-face:
+    base_url: https://api-inference.huggingface.co/models/fdtn-ai/Foundation-Sec-8B-Reasoning
+    api_key_env: HUGGING_FACE_TOKEN
+  vertex-ai:
+    base_url: https://us-central1-aiplatform.googleapis.com/v1beta1/projects/YOUR_PROJECT_ID/locations/us-central1/endpoints/openapi
+    api_key_env: VERTEX_AI_API_KEY
+
+# Per-agent default assignment.
+# Replace 'your-project-id' with your actual Google Cloud Project ID in vertex-ai provider base_url
+# Successfull execution with every provider above.
+  triage:
+    provider: vertex-ai
+    model: meta/llama-3.3-70b-instruct-maas             # tool-using; mistral is solid
+  verifier:
+    provider: ollama-from-container
+    model: phi4-mini:latest  #3.8b                     # reasoning; phi-4 punches up
+  response:
+    provider: vertex-ai
+    model: meta/llama-3.3-70b-instruct-maas
+    # provider: openrouter
+    # model: nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free
+
+# Per-content overrides (matched in order; first match wins; 
+#  falls back to the agent default above).
+
+content_routes: []
+  # - when: "(payload|command_line|raw_log)"
+  #   provider: ollama-from-container
+  #   model: mistral:7b-instruct
+  # - when: "(employee|user_id|email)"
+  #   provider: ollama-from-container
+  #   model: mistral:7b-instruct
+  # - when: "MITRE|threat actor|TTP"
+  #   provider: ollama-from-container
+  #   model: deepseek-coder:6.7b-instruct
+
+# Demo override — wins over everything when set.
+force:
+  provider: null    # set null to disable
+  model: null       # set null to disable
+
+logging:
+  log_every_decision: true
+  format: "{timestamp} | {route} | {reason} | {prompt_hash}"
