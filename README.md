@@ -51,7 +51,7 @@ Raw Alert → Triage Agent  → Verifier Agent (QA) → Response Agent (plan)
 
 ## Project Structure
 
-```
+```text
 SoC-Claw/                            # repo root
 ├── pyproject.toml                   # package config + pinned deps
 ├── uv.lock                          # exact-version lockfile (regenerate with `uv lock`)
@@ -59,31 +59,48 @@ SoC-Claw/                            # repo root
 ├── docker-compose.yml               # app + benchmark services
 ├── scripts/                         # host bootstrap, vLLM launcher
 ├── README.md
-├── SETUP.md                         # full setup guide
 └── soc_claw/                        # the Python package
     ├── __init__.py
     ├── pipeline.py                  # Orchestrator: Triage → Verifier → Response
-    ├── utils.py                     # Shared: JSON extraction, privacy router, LLM client
+    ├── utils.py                     # Shared utility functions
+    ├── audit.py                     # Audit logging
+    ├── routing.py                   # Routing logic
+    ├── schemas.py                   # Pydantic schema validation
+    ├── telemetry.py                 # OpenTelemetry tracing
+    ├── logging_config.py            # JSON logging setup
+    ├── llm/                         # LLM infrastructure
+    │   ├── client.py                # Provider-agnostic client
+    │   ├── caller.py                # LLM execution logic
+    │   └── json_extract.py          # Structured output extraction
     ├── agents/
     │   ├── triage_agent.py          # HAS tools: enrichment + severity scoring
     │   ├── verifier_agent.py        # NO tools: QA check
     │   └── response_agent.py        # NO tools: action planning
     ├── tools/
+    │   ├── base.py                  # Base tool definitions
+    │   ├── registry.py              # Tool registration
     │   ├── ip_reputation.py         # IP threat intel lookup
     │   ├── mitre_lookup.py          # MITRE ATT&CK technique mapper
     │   ├── asset_lookup.py          # Asset inventory/CMDB lookup
     │   └── response_tools.py        # EDR, firewall, ticketing simulations
     ├── data/                        # alerts.json, threat_intel.json, asset_inventory.json, mitre_techniques.json
     ├── config/
-    │   └── privacy_routes.yaml      # Privacy routing rules
+    │   └── routing.yaml             # Model routing configurations
     ├── benchmark/
-    │   ├── harness.py               # `python -m soc_claw.benchmark.harness [N]`
+    │   ├── harness.py               # Benchmark execution
     │   └── results/                 # Output CSVs (gitignored)
-    ├── backend/
-    │   └── server.py                # `python -m soc_claw.backend.server`
+    ├── backend/                     # FastAPI backend
+    │   ├── server.py                # Main app entrypoint
+    │   ├── security.py              # Security & CSRF protection
+    │   ├── auth.py                  # Session management
+    │   └── routers/                 # Organized API routes
+    │       ├── api.py               # Main API endpoints
+    │       ├── auth.py              # Authentication routes
+    │       └── pages.py             # Frontend page rendering
     └── frontend/
-        └── templates/
-            └── index.html           # Tailwind + vanilla JS interface
+        ├── static/                  # Static assets (JS, images)
+        ├── styles/                  # CSS stylesheets
+        └── templates/               # HTML templates
 ```
 
 ## Data Layer
@@ -112,23 +129,21 @@ All data is cross-referenced: every alert hostname exists in asset inventory, ev
 ## Quick Start
 
 ```bash
-# 1. Clone + configure
+# 1. Clone SoC-Claw Repository
 git clone https://github.com/MurtazaN/SoC-Claw
 cd SoC-Claw
-cp .env.example .env   # set HF_TOKEN
 
-# 2. Host bootstrap (uv, venv, vLLM)
-bash scripts/install-host.sh
+# 2. Setup Environment Variables
+cp .env.example .env   
 
-# 3. Start vLLM (terminal 1)
-bash scripts/run-host-vllm.sh
+# set HF_TOKEN
+# set VERTEX_AI_API_KEY
+# set OPENROUTER_API_KEY
 
-# 4. Build + start the app (terminal 2)
-bash scripts/setup.sh
-# Open http://localhost:7860
+# 3. Setup and Run
 
-# 5. Or run the benchmark
-docker compose --profile benchmark run --rm benchmark 30
+docker compose up --build
+
+# 4. Open http://localhost:7860
+
 ```
-
-See [SETUP.md](SETUP.md) for full setup including GPU requirements, env vars, and troubleshooting.
