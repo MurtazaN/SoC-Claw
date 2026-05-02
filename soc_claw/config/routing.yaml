@@ -26,7 +26,7 @@ agents:
     model: mistral:7b-instruct                 # tool-using; mistral is solid
   verifier:
     provider: ollama-from-container
-    model: phi4-mini:3.8b                      # reasoning; phi-4 punches up
+    model: phi4-mini:latest  #3.8b             # reasoning; phi-4 punches up
   response:
     provider: openrouter
     model: nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free
