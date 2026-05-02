@@ -42,7 +42,7 @@ async def call_llm(
     user_content: str,
     schema_class,
     retry_hint: str,
-    retry_hint: str,
+    # retry_hint: str,
     default_factory=None,
     client=None,
 ) -> LLMResult:
