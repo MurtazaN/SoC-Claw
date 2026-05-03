@@ -1,6 +1,6 @@
 # Data for the agents
 
-## advanced_siem_dataset.json (Advanced SIEM)
+## advanced_siem_dataset.json (Advanced SIEM Dataset)
 - The advanced_siem_dataset is a synthetic dataset of 100,000 security event records.
 - **Purpose**: It simulates logs from Security Information and Event Management (SIEM) systems, capturing diverse event types such as firewall activities, intrusion detection system (IDS) alerts, authentication attempts, endpoint activities, network traffic, cloud operations, IoT device events, and AI system interactions.
 - **Structure**: The dataset includes advanced metadata, MITRE ATT&CK techniques, threat actor associations, and unconventional indicators of compromise (IOCs), making it suitable for tasks like anomaly detection, threat classification, predictive analytics, and user and entity behavior analytics (UEBA).
@@ -11,8 +11,15 @@
 - **Purpose**: It serves as the knowledge base for the Response Agent. The agent uses Retrieval-Augmented Generation (RAG) to find and apply the most relevant playbook steps for a verified incident.
 - **Structure**: Each line contains a complete playbook, including: `playbook_id`, `title`, `description`, `severity`, `tactic`, and a list of `steps` (each with `order`, `action`, and `rationale`).
 - Source: https://www.kaggle.com/datasets/cyberprince/incident-response-playbook-dataset?select=incident_response_playbook_dataset.jsonl
+https://huggingface.co/datasets/darkknight25/Incident_Response_Playbook_Dataset
 
-## threat_intel_data.json (Real Threat Intelligence)
+## Mitre_framework_dataset.jsonl (MITRE ATT&CK Framework Data)
+- This dataset provides a comprehensive collection of MITRE ATT&CK Enterprise techniques (v14.1) in JSONL format, designed for cybersecurity professionals, red teams, and threat hunters.
+- **Purpose**: It provides the Triage Agent with a comprehensive understanding of adversarial behavior and attack patterns.
+- **Structure**: The dataset includes detailed information where each entry maps to a specific ATT&CK technique, including its ID, name, description, real-world example, and source.
+- Source: https://huggingface.co/datasets/darkknight25/Mitre_Attacks_Framework_Dataset
+
+## threat_intel_data.json (Real Threat Intelligence Platform Data)
 - This file contains real-world Indicators of Compromise (IOCs) harvested from Abuse.ch ThreatFox (recent exports).
 - **Purpose**: It provides the Triage Agent with up-to-date, real-world malicious IPs and associated threat data to validate against live network traffic.
 - **Structure**: A list of objects, each containing `indicator` (IP address), `threat_score`, `tags` (including malware families like Cobalt Strike, AsyncRAT), `first_seen`, and `last_seen` timestamps.

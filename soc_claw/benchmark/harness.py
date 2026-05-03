@@ -21,7 +21,6 @@ from soc_claw.pipeline import run_pipeline, load_alerts
 # in Docker (compose mounts /app/benchmark/results), and in production
 # (k8s injects a path on a writable PVC).
 #   - Host dev:    defaults to soc-claw/benchmark/results/
-#   - Sandbox:     setup.sh writes BENCHMARK_OUTPUT_DIR=/sandbox/results
 #   - Production:  orchestrator injects a path on a writable volume
 RESULTS_DIR = Path(
     os.environ.get(
