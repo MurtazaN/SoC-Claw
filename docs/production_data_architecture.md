@@ -1,16 +1,16 @@
 # Production Data Architecture
 
-In a production environment, the static JSON files currently in `soc_claw/data` will be replaced by dynamic connections to enterprise security and IT systems. SOC-Claw will act as an orchestration layer, pulling in real-time data from these external sources.
+In a production environment, the static datasets currently in `data/` will be replaced by dynamic connections to enterprise security and IT systems. SOC-Claw will act as an orchestration layer, pulling in real-time data from these external sources.
 
 ## Current vs. Production Mapping
 
 | Current Mock Data | Production Source Type | Real-World Examples | Integration Method |
 | :--- | :--- | :--- | :--- |
-| `alerts.json` | **SIEM / XDR Platform** | Splunk, Microsoft Sentinel, Elastic Security, CrowdStrike | Webhooks, REST API, Kafka/PubSub stream |
-| `threat_intel.json` | **Threat Intelligence Platform (TIP)** | VirusTotal, MISP, Recorded Future, ThreatConnect | REST API, STIX/TAXII feeds |
-| `asset_inventory.json` | **CMDB / Asset Management** | ServiceNow, AWS/Azure API, Device42, Jamf | REST API, PostgreSQL, GraphQL |
-| `mitre_techniques.json`| **Knowledge Base (Threat)** | MITRE ATT&CK Framework | PostgreSQL Database (synced periodically), Redis Cache |
-| `incident_response_playbook_dataset.jsonl` | **Knowledge Base (Playbooks)** | SOAR Playbook Library, Vector Database | RAG via VectorDB (Pinecone/Chroma), Fine-tuned Model |
+| `advanced_siem_dataset.jsonl` | **SIEM / XDR Platform** | Splunk, Microsoft Sentinel, Elastic Security, CrowdStrike | Kafka/PubSub stream first; webhooks or REST API as bridges |
+| `threat_intel_data.json` | **Threat Intelligence Platform (TIP)** | VirusTotal, MISP, Recorded Future, ThreatConnect | REST API, STIX/TAXII feeds |
+| `asset_inventory_data.json` | **CMDB / Asset Management** | ServiceNow, AWS/Azure API, Device42, Jamf | REST API, PostgreSQL, GraphQL |
+| `Mitre_framework_dataset.jsonl`| **Knowledge Base (Threat)** | MITRE ATT&CK Framework | PostgreSQL Database (synced periodically), Redis Cache |
+| `incident_response_playbook_dataset.jsonl` | **Knowledge Base (Playbooks)** | SOAR Playbook Library, Vector Database | RAG over curated playbook corpus in Pinecone, optional fine-tuned model |
 
 ## Production Architecture Diagram
 
@@ -34,7 +34,7 @@ graph TD
     subgraph DataLayer ["Data Abstraction Layer"]
         AlertQueue["Alert Ingestion Queue\n(Redis/RabbitMQ)"]:::storage
         Cache["Context Cache\n(Redis)"]:::storage
-        DB["Application DB & VectorDB\n(PostgreSQL, Chroma)"]:::storage
+        DB["Application DB & VectorDB\n(PostgreSQL, Pinecone)"]:::storage
     end
 
     %% Agent Pipeline (Right)
@@ -42,6 +42,11 @@ graph TD
         Triage["Triage Agent"]:::internal
         Verifier["Verifier Agent"]:::internal
         Response["Response Agent"]:::internal
+    end
+
+    %% Inference Layer (served separately)
+    subgraph Inference ["Inference Layer"]
+        LLM["vLLM / llm-d on k8s\n(Nemotron-Mini-4B)"]:::internal
     end
 
     %% Workflows & Integrations
@@ -61,20 +66,41 @@ graph TD
     Verifier -- "7. Verified Alert" --> Response
     
     Response -- "8. Retrieve IR Playbooks\n(RAG against playbook dataset)" --> DB
-    Response -- "9. Read-only Audit Log" --> DB
+    Response -- "9. Append-only Audit Log" --> DB
+
+    Triage -. "LLM calls" .-> LLM
+    Verifier -. "LLM calls" .-> LLM
+    Response -. "LLM calls" .-> LLM
 ```
 
 ### Answering Your Questions
 
-Yes, the sources can absolutely be APIs, Databases, or Bucket Storage:
+The production shape should be deliberately mixed rather than pushing every source into the same storage layer:
 
-1. **APIs (Most Common):** You will use APIs to fetch threat intel (e.g., checking an IP against VirusTotal) or query the CMDB (e.g., fetching host criticality from ServiceNow). Your existing `soc_claw/tools` (like `ip_reputation.py`) are perfectly positioned to wrap these API calls.
-2. **Databases (Postgres):** For static or slowly changing data like `mitre_techniques.json` or even a periodically synced `asset_inventory`, a relational database like PostgreSQL is ideal. You can use an ORM like SQLAlchemy or SQLModel in your FastAPI backend to interact with it.
-3. **Bucket Storage (S3) / Message Queues:** For `alerts.json`, while you could poll S3 buckets for new log files, a more modern approach is to have the SIEM push alerts via Webhooks to a FastAPI endpoint, or have SOC-Claw subscribe to a message broker (Kafka, RabbitMQ, Redis Pub/Sub) for real-time alert streaming.
+1. **Alerts:** Use Kafka as the primary event-stream ingress for SIEM alerts when available. Keep webhooks or REST endpoints as adapters for platforms that cannot publish directly to Kafka.
+2. **Vector databases:** Do not route everything through Pinecone. Reserve VectorDB usage for unstructured playbook retrieval and other similarity search use cases. Threat intel, CMDB, and MITRE content should stay on APIs, relational databases, or cache-backed lookups.
+3. **Caching:** Add the caching abstraction now, not after Kubernetes. Start with an in-memory fallback for local development, then back it with Redis as soon as you need shared state, rate-limit protection, or multi-worker deployment.
+4. **RAG:** Use bounded RAG for playbooks rather than fully agentic RAG. Concrete shape: top-3 playbook snippets per alert, single retrieval (no re-query), keyed on the alert's mapped ATT&CK technique. The response stage stays planner-only, with retrieved context feeding a human-reviewable response plan.
+
+### Architectural Decisions (pinned)
+
+Locked-in choices to prevent re-litigation. Each row is the canonical answer; deeper rationale lives in the per-step plans.
+
+| Decision | Choice | Rationale |
+| :--- | :--- | :--- |
+| Vector DB | Pinecone (managed in prod; Docker emulator for dev) | Production-ready managed service with a real local emulator — same SDK in both environments |
+| Embedding strategy | Client-side in both dev and prod | Pinecone Inference is unavailable in Pinecone Local; client-side everywhere preserves dev/prod parity |
+| Embedding model | `BAAI/bge-small-en-v1.5` (384-dim) | CPU-friendly, runs alongside vLLM, sufficient quality for playbook retrieval |
+| Cache backend | In-memory now, Redis pre-k8s | Same interface for both; backend selection via `SOC_CLAW_REDIS_URL` |
+| Cache method | Single `get_or_compute(key, compute, ttl)` | Eliminates miss-and-set bug class; minimal interface surface |
+| Mock-to-prod transition | Per-source cutover, no runtime toggle | Each JSON loader replaced individually when its connector is ready |
+| Audit log | Append-only writes from response agent → application DB | Read-only at query time; never mutated in place |
 
 ### Recommended Next Steps for Production Data
 
-To bridge the gap between mock and production without breaking everything at once:
+Sequencing follows the deployment roadmap (Docker → Compose → llm-d / k8s). Each step has a dedicated plan in [docs/](.):
 
-1. **Implement the Repository Pattern:** Abstract your data access. Create base classes for `AlertRepository`, `ThreatIntelRepository`, etc. Your mock JSON files become one implementation, and your future Postgres/API integrations become another. This allows you to toggle between mock and real data using environment variables.
-2. **Add a Caching Layer (Redis):** API limits on Threat Intel platforms are strict. You'll need Redis to cache IP/Domain reputation lookups to avoid rate limiting and speed up the Triage agent.
+1. **Pre-Compose — Cache interface with in-memory backend.** Route threat intel and CMDB lookups through it from day one. No external dependency yet; keeps the call sites stable. Plan: [plan-01-cache.md](plan-01-cache.md).
+2. **Pre-k8s — Redis backend.** Set `SOC_CLAW_REDIS_URL` once you need shared state across multiple workers or pods. No call-site changes from step 1. Plan: same as step 1 — [plan-01-cache.md](plan-01-cache.md).
+3. **Pre-k8s — Bounded RAG for playbooks.** Top-3 retrieval, single-pass, keyed on ATT&CK technique. Plan: [plan-02-rag-pinecone.md](plan-02-rag-pinecone.md).
+4. **Cutover — replace data loaders, per source.** No runtime toggle between mock and real — each JSON loader is removed when its connector is ready. Plans: [plan-03-cutover-siem.md](plan-03-cutover-siem.md), [plan-04-cutover-threat-intel.md](plan-04-cutover-threat-intel.md), [plan-05-cutover-cmdb.md](plan-05-cutover-cmdb.md).
