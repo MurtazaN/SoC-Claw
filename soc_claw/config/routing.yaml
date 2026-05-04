@@ -37,7 +37,7 @@ agents:
     model: minimaxai/minimax-m2.7
   response:
     provider: nvidia-nim
-    model: z-ai/glm4.7
+    model: meta/llama-guard-4-12b #qwen/qwen3-coder-480b-a35b-instruct
     # provider: vertex-ai
     # model: meta/llama-3.3-70b-instruct-maas
     # provider: openrouter
