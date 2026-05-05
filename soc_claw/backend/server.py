@@ -119,6 +119,52 @@ app.include_router(pages_router)
 app.include_router(api_router)
 
 
+# ──────────────────────── Lifecycle Events ────────────────────────
+
+@app.on_event("startup")
+async def startup_event():
+    """Start background services on startup."""
+    logger.info("Starting SOC-Claw backend")
+
+    # Start Kafka consumer
+    try:
+        from soc_claw.connectors.kafka_consumer import start_kafka_consumer
+        await start_kafka_consumer()
+        logger.info("Kafka consumer started")
+    except Exception as e:
+        logger.error(f"Failed to start Kafka consumer: {e}")
+
+    # Start DLQ reprocessor
+    try:
+        from soc_claw.connectors.dlq_reprocessor import start_dlq_reprocessor
+        await start_dlq_reprocessor()
+        logger.info("DLQ reprocessor started")
+    except Exception as e:
+        logger.error(f"Failed to start DLQ reprocessor: {e}")
+
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """Stop background services on shutdown."""
+    logger.info("Stopping SOC-Claw backend")
+
+    # Stop Kafka consumer
+    try:
+        from soc_claw.connectors.kafka_consumer import stop_kafka_consumer
+        await stop_kafka_consumer()
+        logger.info("Kafka consumer stopped")
+    except Exception as e:
+        logger.error(f"Failed to stop Kafka consumer: {e}")
+
+    # Stop DLQ reprocessor
+    try:
+        from soc_claw.connectors.dlq_reprocessor import stop_dlq_reprocessor
+        await stop_dlq_reprocessor()
+        logger.info("DLQ reprocessor stopped")
+    except Exception as e:
+        logger.error(f"Failed to stop DLQ reprocessor: {e}")
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=7860)

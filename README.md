@@ -1,4 +1,5 @@
 # SOC-Claw: Multi-Agent Incident Response Coordinator
+(Potential name BlueLantern)
 
 SOC analysts see 4,000 alerts per day. 95% are noise. Missing the 5% that matter costs $4.45M per breach. SOC-Claw solves this with a three-agent pipeline that triages, self-corrects, and plans response actions — with the human always in the loop.
 
@@ -38,6 +39,33 @@ Raw Alert → Triage Agent  → Verifier Agent (QA) → Response Agent (plan)
 | Pure inference stages (fast) | 2 of 3 (Verifier + Response) |
 | Privacy routing | Sensitive data stays on local inference |
 
+## SIEM Alert Ingress
+
+SOC-Claw now supports real-time alert ingestion from production SIEM platforms:
+
+**Supported SIEMs:**
+- Splunk
+- Microsoft Sentinel
+- CrowdStrike
+
+**Ingress Methods:**
+- **Webhook**: `POST /api/siem/webhook` with HMAC-SHA256 signature
+- **Batch API**: `POST /api/batch/upload` for JSONL file uploads
+- **Kafka Consumer**: Automatic processing from Kafka topic
+
+**Output:**
+- Results written to GCP Bucket (JSONL format)
+- Automatic DLQ reprocessing for failed alerts
+- Kafka consumer group offsets for idempotency
+
+**Error Handling:**
+- Log parsing errors → DLQ
+- Agent down → Stop pipeline with error message
+- Service not started → Retry 3 times with 30s delay
+- Pipeline timeout → DLQ, continue processing next alert
+
+For detailed configuration and deployment instructions, see [SETUP.md](SETUP.md).
+
 ![Dashboard](assests/dashboard.png)
 *Dashboard: 30 synthetic SIEM alerts with severity badges, alert feed table, and "Run All 30" benchmark button.*
 
@@ -56,7 +84,9 @@ SoC-Claw/                            # repo root
 ├── pyproject.toml                   # package config + pinned deps
 ├── uv.lock                          # exact-version lockfile (regenerate with `uv lock`)
 ├── Dockerfile                       # uv-based build, non-root runtime
-├── docker-compose.yml               # app + benchmark services
+├── docker-compose.yml               # app + benchmark + Kafka + Redis services
+├── .env.example                     # Environment variables template
+├── SETUP.md                         # Detailed setup and deployment guide
 ├── scripts/                         # host bootstrap, vLLM launcher
 ├── README.md
 └── soc_claw/                        # the Python package
@@ -83,6 +113,18 @@ SoC-Claw/                            # repo root
     │   ├── mitre_lookup.py          # MITRE ATT&CK technique mapper
     │   ├── asset_lookup.py          # Asset inventory/CMDB lookup
     │   └── response_tools.py        # EDR, firewall, ticketing simulations
+    ├── connectors/                  # SIEM alert ingress connectors
+    │   ├── base.py                  # Base connector interfaces
+    │   ├── siem_splunk.py           # Splunk mapper
+    │   ├── siem_sentinel.py         # Microsoft Sentinel mapper
+    │   ├── siem_crowdstrike.py      # CrowdStrike mapper
+    │   ├── kafka_producer.py        # Kafka producer for alerts
+    │   ├── kafka_consumer.py        # Kafka consumer for pipeline
+    │   ├── dlq_kafka.py             # Kafka-based DLQ handler
+    │   ├── dlq_reprocessor.py       # Automatic DLQ reprocessing
+    │   ├── output_gcp.py            # GCP Bucket output
+    │   ├── job_manager.py           # Batch job tracking
+    │   └── metrics.py               # OpenTelemetry metrics
     ├── data/                        # alerts.json, threat_intel.json, asset_inventory.json, mitre_techniques.json
     ├── config/
     │   └── routing.yaml             # Model routing configurations
@@ -96,7 +138,9 @@ SoC-Claw/                            # repo root
     │   └── routers/                 # Organized API routes
     │       ├── api.py               # Main API endpoints
     │       ├── auth.py              # Authentication routes
-    │       └── pages.py             # Frontend page rendering
+    │       ├── pages.py             # Frontend page rendering
+    │       ├── siem_webhook.py      # SIEM webhook endpoint
+    │       └── batch_api.py         # Batch upload endpoint
     └── frontend/
         ├── static/                  # Static assets (JS, images)
         ├── styles/                  # CSS stylesheets
@@ -134,22 +178,36 @@ git clone https://github.com/MurtazaN/SoC-Claw
 cd SoC-Claw
 
 # 2. Setup Environment Variables
-cp .env.example .env   
+cp .env.example .env
 
-# set HF_TOKEN
-# set VERTEX_AI_API_KEY
-# set OPENROUTER_API_KEY
-
-# 3. Setup and Run
-
-docker compose build --no-cache app
-
+# 3. Start all services (Redis, Kafka, Zookeeper, App)
 docker compose up
 
 # 4. Open http://localhost:7860
 
 # 5. Login with your credentials
 # For Demo use: analyst / analyst
-
 ```
+
+**That's it!** Docker Compose will automatically:
+- Start Redis for job tracking
+- Start Zookeeper and Kafka for message streaming
+- Create Kafka topics (`soc-claw-alerts` and `soc-claw-alerts-dlq`)
+- Start the SOC-Claw application
+
+For detailed setup instructions, including production deployment, see [SETUP.md](SETUP.md).
+
+### Optional: Run vLLM for Local Inference
+
+For better performance and privacy, run vLLM locally:
+
+```bash
+# Install vLLM
+uv pip install vllm --torch-backend=auto
+
+# Start vLLM server
+vllm serve mistral:7b-instruct --port 8000
+```
+
+The app will automatically connect to vLLM at `http://localhost:8000/v1`.
 For Reference - https://www.exabeam.com/explainers/siem/ai-siem-how-siem-with-ai-ml-is-revolutionizing-the-soc/#:~:text=automatically%20trigger%20alerts%2C%20implement%20predefined,even%20orchestrate%20complex%20response%20workflows

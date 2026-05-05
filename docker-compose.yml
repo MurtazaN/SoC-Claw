@@ -58,3 +58,60 @@ services:
       - "127.0.0.1:6379:6379"
     command: ["redis-server", "--save", "", "--appendonly", "no"]
     restart: unless-stopped
+
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.5.0
+    container_name: soc-claw-zookeeper
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    ports:
+      - "127.0.0.1:2181:2181"
+    restart: unless-stopped
+
+  kafka:
+    image: confluentinc/cp-kafka:7.5.0
+    container_name: soc-claw-kafka
+    depends_on:
+      - zookeeper
+    ports:
+      - "127.0.0.1:9092:9092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "kafka-broker-api-versions", "--bootstrap-server", "localhost:9092"]
+      interval: 10s
+      timeout: 10s
+      retries: 5
+
+  kafka-init:
+    image: confluentinc/cp-kafka:7.5.0
+    container_name: soc-claw-kafka-init
+    depends_on:
+      kafka:
+        condition: service_healthy
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      KAFKA_TOPIC_ALERTS: soc-claw-alerts
+      KAFKA_TOPIC_DLQ: soc-claw-alerts-dlq
+      KAFKA_PARTITIONS: 3
+      KAFKA_REPLICATION_FACTOR: 1
+    command: >
+      bash -c "
+      echo 'Waiting for Kafka to be ready...'
+      until kafka-topics --bootstrap-server kafka:9092 --list > /dev/null 2>&1; do
+        echo 'Kafka not ready yet, waiting...'
+        sleep 5
+      done
+      echo 'Kafka is ready! Creating topics...'
+      kafka-topics --create --bootstrap-server kafka:9092 --topic soc-claw-alerts --partitions 3 --replication-factor 1 --if-not-exists
+      kafka-topics --create --bootstrap-server kafka:9092 --topic soc-claw-alerts-dlq --partitions 1 --replication-factor 1 --if-not-exists
+      echo 'Topics created successfully!'
+      kafka-topics --bootstrap-server kafka:9092 --list
+      "
+    restart: "no"

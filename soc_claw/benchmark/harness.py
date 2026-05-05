@@ -14,7 +14,8 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from soc_claw.pipeline import run_pipeline, load_alerts
+from soc_claw.pipeline import run_pipeline
+from soc_claw.schemas import Alert
 
 
 # Output directory is environment-driven so the same code works on host,
@@ -28,6 +29,28 @@ RESULTS_DIR = Path(
         str(Path(__file__).parent / "results"),
     )
 )
+
+
+def load_alerts(data_dir: Path | None = None) -> list[dict]:
+    """Load all alerts from the data directory.
+
+    Each alert is validated against the ``Alert`` schema. Invalid entries
+    are logged and skipped so a single bad record doesn't block the
+    entire pipeline.
+    """
+    directory = data_dir or (Path(__file__).parent.parent / "mock_data")
+    data_path = directory / "alerts.json"
+    with open(data_path) as f:
+        raw = json.load(f)
+
+    validated: list[dict] = []
+    for i, item in enumerate(raw):
+        try:
+            alert = Alert.model_validate(item)
+            validated.append(alert.model_dump())
+        except Exception as exc:
+            logger.warning("Skipping invalid alert at index %d: %s", i, exc)
+    return validated
 
 
 def compute_percentile(values: list[float], p: float) -> float:

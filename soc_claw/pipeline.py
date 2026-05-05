@@ -27,6 +27,7 @@ Flow:
 import ipaddress
 import json
 import logging
+import os
 import time
 from pathlib import Path
 
@@ -38,6 +39,9 @@ from soc_claw.tools import response_tools
 from soc_claw.audit import log_analyst_action
 
 logger = logging.getLogger("soc-claw.pipeline")
+
+# Feature flag for alert source
+ALERT_SOURCE = os.environ.get("ALERT_SOURCE", "jsonl")  # kafka, webhook, or jsonl
 
 
 def merge_verdict(triage_result: dict, verification_result: dict) -> dict:
@@ -245,34 +249,10 @@ def execute_approved_action(
     }
 
 
-def load_alerts(data_dir: Path | None = None) -> list[dict]:
-    """Load all alerts from the data directory.
+def get_alert_source() -> str:
+    """Get the current alert source.
 
-    Each alert is validated against the ``Alert`` schema. Invalid entries
-    are logged and skipped so a single bad record doesn't block the
-    entire pipeline.
+    Returns:
+        Alert source identifier (kafka, webhook, or jsonl)
     """
-    from soc_claw.schemas import Alert
-
-    directory = data_dir or (Path(__file__).parent / "mock_data")
-    data_path = directory / "alerts.json"
-    with open(data_path) as f:
-        raw = json.load(f)
-
-    validated: list[dict] = []
-    for i, item in enumerate(raw):
-        try:
-            alert = Alert.model_validate(item)
-            validated.append(alert.model_dump())
-        except Exception as exc:
-            logger.warning("Skipping invalid alert at index %d: %s", i, exc)
-    return validated
-
-
-def get_alert_by_id(alert_id: str) -> dict | None:
-    """Get a single alert by ID."""
-    alerts = load_alerts()
-    for alert in alerts:
-        if alert["id"] == alert_id:
-            return alert
-    return None
+    return ALERT_SOURCE
