@@ -79,7 +79,7 @@ async def reprocess_dlq():
     """Reprocess DLQ entries automatically."""
     global _running
 
-    consumer = get_dlq_consumer()
+    consumer = await get_dlq_consumer()
     if not consumer:
         logger.error("DLQ consumer not available, cannot reprocess")
         return
@@ -137,7 +137,7 @@ async def reprocess_dlq():
                         entry["retry_count"] = retry_count + 1
 
                         # Send back to DLQ with updated retry count
-                        producer = get_kafka_producer()
+                        producer = await get_kafka_producer()
                         if producer:
                             await producer.send_and_wait(
                                 TOPIC_DLQ,

@@ -168,7 +168,7 @@ async def consume_alerts():
     """Consume alerts from Kafka and run pipeline."""
     global _running
 
-    consumer = get_kafka_consumer()
+    consumer = await get_kafka_consumer()
     if not consumer:
         logger.error("Kafka consumer not available, cannot consume alerts")
         return

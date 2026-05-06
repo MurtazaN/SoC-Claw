@@ -119,6 +119,77 @@ gcloud iam service-accounts keys create service-account-key.json \
     --iam-account soc-claw-sa@your-project-id.iam.gserviceaccount.com
 ```
 
+### Step 2.5: Service Account Key Setup (Detailed Guide)
+
+**Step-by-step guide for creating a service account key:**
+
+1. **Go to GCP Console** → [IAM & Admin → Service Accounts](https://console.cloud.google.com/iam-admin/serviceaccounts)
+
+2. **Create service account** (or select existing one):
+   - Click "Create Service Account"
+   - Name: `soc-claw-gcs-reader`
+   - Description: "Reads SIEM logs from GCS bucket"
+   - Click "Create and Continue"
+
+3. **Add roles**:
+   - Click "Continue" to skip adding roles (we'll add them next)
+   - Click "Done" to create the service account
+
+4. **Grant storage permissions**:
+   - Click on the service account you just created
+   - Go to "Permissions" tab
+   - Click "Grant Access"
+   - Add principal: `soc-claw-gcs-reader@your-project-id.iam.gserviceaccount.com`
+   - Select role: `Storage Object Viewer` (for reading logs)
+   - If writing results to same/sibling bucket, also add: `Storage Object Creator`
+   - Click "Save"
+
+5. **Create key**:
+   - Click on the service account
+   - Go to "Keys" tab
+   - Click "Add Key" → "Create New Key"
+   - Select **JSON** format
+   - Click "Create"
+   - Download the `.json` key file (save it securely!)
+
+6. **Set environment variable**:
+   ```bash
+   # Option 1: Set in .env file
+   GOOGLE_APPLICATION_CREDENTIALS=/path/to/service-account-key.json
+
+   # Option 2: Set in shell
+   export GOOGLE_APPLICATION_CREDENTIALS=/path/to/service-account-key.json
+
+   # Option 3: Use Application Default Credentials (ADC)
+   gcloud auth application-default login
+   ```
+
+**Security Notes:**
+- ⚠️ **Never commit service account keys to git**
+- ⚠️ **Store keys securely** (use k8s secrets, vault, or secure env vars)
+- ⚠️ **Rotate keys regularly** (every 90 days recommended)
+- ⚠️ **Revoke old keys** after rotation
+
+**For Kubernetes deployments:**
+```bash
+# Create secret from key file
+kubectl create secret generic soc-claw-gcs-credentials \
+    --from-file=credentials.json=/path/to/service-account-key.json
+
+# Mount secret in pod
+# Add to deployment.yaml:
+#   env:
+#     - name: GOOGLE_APPLICATION_CREDENTIALS
+#       value: /secrets/credentials.json
+#   volumeMounts:
+#     - name: gcs-credentials
+#       mountPath: /secrets
+#   volumes:
+#     - name: gcs-credentials
+#       secret:
+#         secretName: soc-claw-gcs-credentials
+```
+
 ### Step 3: Configure SIEM Webhook
 
 Configure your SIEM to send alerts to the SOC-Claw webhook:

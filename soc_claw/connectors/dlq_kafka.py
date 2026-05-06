@@ -37,7 +37,7 @@ async def send_to_dlq(
     Returns:
         True if sent successfully, False otherwise
     """
-    producer = get_kafka_producer()
+    producer = await get_kafka_producer()
     if not producer:
         logger.error("Kafka producer not available for DLQ")
         return False
@@ -48,7 +48,7 @@ async def send_to_dlq(
             "error_type": error_type.value,
             "error_message": error_message,
             "siem_source": source,
-            "ingested_at": datetime.utcnow().isoformat(),
+            "ingested_at": datetime.now(timezone.utc).isoformat(),
             "retry_count": 0,
         }
 

@@ -42,10 +42,19 @@ from soc_claw.backend.auth import (  # noqa: E402  (after observability bootstra
     get_current_user,
 )
 from soc_claw.backend.routers import api_router, auth_router, pages_router
+from soc_claw.backend.routes.siem_webhook import router as siem_webhook_router
+from soc_claw.backend.routes.batch_api import router as batch_api_router
 
 logger = logging.getLogger("soc-claw.server")
 
 app = FastAPI(title="SOC-Claw")
+
+# Store environment variables in app state for access by routes
+app.state.env = {
+    "GCS_LOG_BUCKET_NAME": os.environ.get("GCS_LOG_BUCKET_NAME", ""),
+    "SOC_CLAW_BATCH_SIZE": int(os.environ.get("SOC_CLAW_BATCH_SIZE", "30")),
+    "SOC_CLAW_GCS_POLL_INTERVAL": int(os.environ.get("SOC_CLAW_GCS_POLL_INTERVAL", "300")),
+}
 
 # ──────────────────────── CSRF Middleware (S3) ────────────────────────
 # starlette-csrf sets a ``csrftoken`` cookie and requires a matching
@@ -117,6 +126,8 @@ app.add_middleware(SecurityMiddleware, config=build_security_config())
 app.include_router(auth_router)
 app.include_router(pages_router)
 app.include_router(api_router)
+app.include_router(siem_webhook_router)
+app.include_router(batch_api_router)
 
 
 # ──────────────────────── Lifecycle Events ────────────────────────
@@ -126,10 +137,18 @@ async def startup_event():
     """Start background services on startup."""
     logger.info("Starting SOC-Claw backend")
 
+    # Start GCS poller
+    try:
+        from soc_claw.connectors.gcs_poller import start_gcs_poller
+        await start_gcs_poller()
+        logger.info("GCS poller started")
+    except Exception as e:
+        logger.error(f"Failed to start GCS poller: {e}")
+
     # Start Kafka consumer
     try:
-        from soc_claw.connectors.kafka_consumer import start_kafka_consumer
-        await start_kafka_consumer()
+        from soc_claw.connectors.kafka_consumer import start_consumer
+        await start_consumer()
         logger.info("Kafka consumer started")
     except Exception as e:
         logger.error(f"Failed to start Kafka consumer: {e}")
@@ -148,10 +167,18 @@ async def shutdown_event():
     """Stop background services on shutdown."""
     logger.info("Stopping SOC-Claw backend")
 
+    # Stop GCS poller
+    try:
+        from soc_claw.connectors.gcs_poller import stop_gcs_poller
+        await stop_gcs_poller()
+        logger.info("GCS poller stopped")
+    except Exception as e:
+        logger.error(f"Failed to stop GCS poller: {e}")
+
     # Stop Kafka consumer
     try:
-        from soc_claw.connectors.kafka_consumer import stop_kafka_consumer
-        await stop_kafka_consumer()
+        from soc_claw.connectors.kafka_consumer import stop_consumer
+        await stop_consumer()
         logger.info("Kafka consumer stopped")
     except Exception as e:
         logger.error(f"Failed to stop Kafka consumer: {e}")

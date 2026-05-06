@@ -3,6 +3,8 @@
 import asyncio
 import json
 import logging
+import os
+from datetime import datetime, timezone
 from typing import Optional
 
 from aiokafka import AIOKafkaProducer
@@ -72,7 +74,7 @@ async def publish_alert(alert: dict, source: str = "unknown") -> bool:
     Returns:
         True if published successfully, False otherwise
     """
-    producer = get_kafka_producer()
+    producer = await get_kafka_producer()
     if not producer:
         logger.error("Kafka producer not available")
         return False
@@ -110,7 +112,7 @@ async def publish_to_dlq(
     Returns:
         True if published successfully, False otherwise
     """
-    producer = get_kafka_producer()
+    producer = await get_kafka_producer()
     if not producer:
         logger.error("Kafka producer not available for DLQ")
         return False
@@ -121,7 +123,7 @@ async def publish_to_dlq(
             "error_type": error_type,
             "error_message": error_message,
             "siem_source": source,
-            "ingested_at": datetime.utcnow().isoformat(),
+            "ingested_at": datetime.now(timezone.utc).isoformat(),
             "retry_count": 0,
         }
 

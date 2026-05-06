@@ -43,15 +43,24 @@ Raw Alert → Triage Agent  → Verifier Agent (QA) → Response Agent (plan)
 
 SOC-Claw now supports real-time alert ingestion from production SIEM platforms:
 
+**Primary Source:**
+- **GCS Bucket**: SIEM logs stored in GCS, accessed via GCS API
+- **Dashboard**: Shows most recent 30 alerts from GCS
+- **Processing**: Polling (auto, configurable) + On-demand (dashboard buttons)
+
+**Secondary Source:**
+- **Webhook**: `POST /api/siem/webhook` with HMAC-SHA256 signature
+- **Batch API**: `POST /api/batch/upload` for JSONL file uploads
+- **Kafka Consumer**: Automatic processing from Kafka topic
+
 **Supported SIEMs:**
 - Splunk
 - Microsoft Sentinel
 - CrowdStrike
 
-**Ingress Methods:**
-- **Webhook**: `POST /api/siem/webhook` with HMAC-SHA256 signature
-- **Batch API**: `POST /api/batch/upload` for JSONL file uploads
-- **Kafka Consumer**: Automatic processing from Kafka topic
+**Dashboard Buttons:**
+- **"Process Latest N"**: Fetch N alerts from GCS, run pipeline, show results in table
+- **"Process All"**: Fetch ALL alerts from GCS, run pipeline, real-time SSE progress
 
 **Output:**
 - Results written to GCP Bucket (JSONL format)
@@ -123,6 +132,8 @@ SoC-Claw/                            # repo root
     │   ├── dlq_kafka.py             # Kafka-based DLQ handler
     │   ├── dlq_reprocessor.py       # Automatic DLQ reprocessing
     │   ├── output_gcp.py            # GCP Bucket output
+    │   ├── gcs_reader.py            # GCS bucket reader (list/download)
+    │   ├── gcs_poller.py            # Background GCS poller (configurable)
     │   ├── job_manager.py           # Batch job tracking
     │   └── metrics.py               # OpenTelemetry metrics
     ├── data/                        # alerts.json, threat_intel.json, asset_inventory.json, mitre_techniques.json

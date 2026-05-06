@@ -25,6 +25,8 @@ dependencies = [
     "fastapi-guard>=7.0.0",
     "cachetools>=5.3",
     "redis>=5",
+    "google-cloud-storage>=2.0",
+    "aiokafka>=0.9.0",
 ]
 
 # vLLM is intentionally NOT a project dependency. It is a host-only GPU

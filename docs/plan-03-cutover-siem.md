@@ -5,18 +5,26 @@
 
 ## Goal
 
-Replace the static [data/advanced_siem_dataset.jsonl](../data/advanced_siem_dataset.jsonl) reader with real-time alert ingress from production SIEM platforms (Splunk, Sentinel, Elastic, CrowdStrike).
+Replace the static [data/advanced_siem_dataset.jsonl](../data/advanced_siem_dataset.jsonl) reader with real-time alert ingress from production SIEM platforms (Splunk, Sentinel, Elastic, CrowdStrike) via GCS API.
+
+**Primary source**: GCS Bucket containing SIEM log files, accessed via GCS API
+**Secondary source**: Webhook/Batch API for real-time SIEM alert ingestion (Kafka-based)
 
 ## Scope
 
-- **In:** Kafka consumer, FastAPI webhook endpoint, batch API endpoint, schema normalization, Kafka-based DLQ with automatic reprocessing.
+- **In:** GCS API reader (list/download), GCS poller (configurable), Kafka consumer, FastAPI webhook endpoint, batch API endpoint, schema normalization, Kafka-based DLQ with automatic reprocessing.
 - **Out:** GCP Bucket output (JSONL format), SIEM-side rule authoring; alert deduplication strategy beyond simple idempotency (deferred to v2).
 
 ## Pinned decisions
 
 | Decision | Choice | Rationale |
 | :--- | :--- | :--- |
-| Primary ingress | Kafka topic consumer | Most production SIEMs publish to Kafka or can be configured to |
+| Primary source | GCS Bucket via GCS API | SIEM logs stored in GCS, accessed via https://storage.googleapis.com/storage/v1/ |
+| Primary auth | Service account key + OAuth | GOOGLE_APPLICATION_CREDENTIALS for GCS API access |
+| Dashboard data | Fetch most recent 30 alerts from GCS | Real data from production source, no mock data |
+| Alert analysis | Show processed result from GCP | No re-run, display existing results |
+| Processing | Polling (auto) + On-demand (dashboard buttons) | Configurable polling for real-time detection, buttons for manual runs |
+| Secondary ingress | Kafka topic consumer | Webhook/Batch API for real-time SIEM alerts |
 | Bridge ingress | FastAPI webhook | Adapter for SIEMs that cannot publish to Kafka |
 | Batch ingress | FastAPI batch API (asynchronous) | For batch JSONL uploads, returns job ID immediately |
 | Queue | Kafka topic (single source of truth) | Kafka is purpose-built for event streaming, durable, replayable |
@@ -101,6 +109,230 @@ class SIEMMapper(ABC):
 3. Validate against `Alert` pydantic schema
 4. Strip `ground_truth` if present
 5. Return normalized dict or raise `NormalizationError`
+
+## GCS API Integration
+
+### GCS API Endpoints
+
+| Operation | Method | Endpoint |
+|-----------|--------|----------|
+| List objects | `GET` | `https://storage.googleapis.com/storage/v1/b/{bucket}/o?maxResults=30` |
+| Download object | `GET` | `https://storage.googleapis.com/storage/v1/b/{bucket}/o/{escaped-object-name}?alt=media` |
+
+### GCS Reader Module
+
+Create `soc_claw/connectors/gcs_reader.py`:
+
+```python
+from google.cloud import storage
+from google.cloud.storage import Client
+
+def get_gcs_client() -> Client:
+    """Get GCS client using Application Default Credentials."""
+    return storage.Client()
+
+def list_alerts(bucket_name: str, max_results: int = 30) -> list[dict]:
+    """List most recent alert objects from GCS bucket.
+
+    Returns list of object metadata (name, updated, size).
+    """
+    client = get_gcs_client()
+    bucket = client.bucket(bucket_name)
+    blobs = bucket.list_blobs(max_results=max_results, order_by='time_created desc')
+    return [{'name': blob.name, 'updated': blob.updated, 'size': blob.size} for blob in blobs]
+
+def download_alert(bucket_name: str, object_name: str) -> dict:
+    """Download and parse a single alert from GCS."""
+    client = get_gcs_client()
+    bucket = client.bucket(bucket_name)
+    blob = bucket.blob(object_name)
+    content = blob.download_as_text()
+    return json.loads(content)
+
+def download_batch(bucket_name: str, max_results: int = 30) -> list[dict]:
+    """Download and parse a batch of alerts from GCS."""
+    objects = list_alerts(bucket_name, max_results)
+    alerts = []
+    for obj in objects:
+        try:
+            alert = download_alert(bucket_name, obj['name'])
+            alerts.append(alert)
+        except Exception as e:
+            logger.error(f"Failed to download {obj['name']}: {e}")
+    return alerts
+```
+
+### GCS Poller Module (Configurable)
+
+Create `soc_claw/connectors/gcs_poller.py`:
+
+```python
+import asyncio
+import os
+from soc_claw.connectors.gcs_reader import download_batch
+from soc_claw.pipeline import run_pipeline
+from soc_claw.connectors.output_gcp import upload_result
+
+POLL_INTERVAL = int(os.environ.get("SOC_CLAW_GCS_POLL_INTERVAL", "300"))  # 5 minutes default
+BATCH_SIZE = int(os.environ.get("SOC_CLAW_BATCH_SIZE", "30"))
+
+async def poll_gcs():
+    """Background task to poll GCS for new alerts and process them."""
+    if POLL_INTERVAL == 0:
+        logger.info("GCS polling disabled (SOC_CLAW_GCS_POLL_INTERVAL=0)")
+        return
+
+    logger.info(f"Starting GCS poller (interval={POLL_INTERVAL}s, batch_size={BATCH_SIZE})")
+
+    while True:
+        try:
+            alerts = download_batch(GCS_LOG_BUCKET_NAME, BATCH_SIZE)
+            logger.info(f"Downloaded {len(alerts)} alerts from GCS")
+
+            for alert in alerts:
+                try:
+                    result = await run_pipeline(alert)
+                    await upload_result(result)
+                    logger.info(f"Processed alert {alert.get('id')}")
+                except Exception as e:
+                    logger.error(f"Failed to process alert {alert.get('id')}: {e}")
+
+        except Exception as e:
+            logger.error(f"GCS poller failed: {e}")
+
+        await asyncio.sleep(POLL_INTERVAL)
+
+async def start_gcs_poller():
+    """Start the GCS poller background task."""
+    if POLL_INTERVAL > 0:
+        asyncio.create_task(poll_gcs())
+
+async def stop_gcs_poller():
+    """Stop the GCS poller (no-op for now, can be enhanced with cancellation)."""
+    pass
+```
+
+### Service Account Key Setup
+
+**Step-by-step guide:**
+
+1. Go to [GCP Console → IAM & Admin → Service Accounts](https://console.cloud.google.com/iam-admin/serviceaccounts)
+2. Create service account:
+   - Name: `soc-claw-gcs-reader`
+   - Description: "Reads SIEM logs from GCS bucket"
+3. Add roles:
+   - `Storage Object Viewer` (for reading logs)
+   - If writing results to same/sibling bucket: `Storage Object Creator` too
+4. Create key:
+   - Click the service account → Keys → Add Key → Create New Key
+   - Select **JSON** format
+   - Download the `.json` key file
+5. Set environment variable:
+   ```bash
+   # In .env or k8s secrets
+   GOOGLE_APPLICATION_CREDENTIALS=/path/to/service-account-key.json
+   ```
+   OR use Application Default Credentials (ADC):
+   ```bash
+   gcloud auth application-default login
+   ```
+
+### Dashboard API Updates
+
+**New endpoints:**
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `POST` | `/api/process-batch` | Process latest N alerts from GCS, return results |
+| `GET` | `/api/process-all` | Process ALL alerts from GCS, SSE streaming progress |
+| `GET` | `/api/alerts/{alert_id}` | Get alert by ID from GCS (updated to use GCS reader) |
+
+**Updated endpoints:**
+
+| Method | Endpoint | Change |
+|--------|----------|--------|
+| `GET` | `/api/alerts` | Now fetches from GCS instead of alerts.json |
+
+### Dashboard Buttons (Replaces "Run All 30")
+
+| Button | Name | Endpoint | Behavior |
+|--------|------|----------|----------|
+| 1 | **"Process Latest N"** | `POST /api/process-batch` | Fetch N alerts from GCS, run pipeline, show results in table |
+| 2 | **"Process All"** | `GET /api/process-all` | Fetch ALL alerts from GCS, run pipeline, real-time SSE progress |
+
+### Environment Variables
+
+```bash
+# GCS Bucket containing SIEM log files (source of truth for logs)
+GCS_LOG_BUCKET_NAME=soc-claw-siem-logs
+
+# Max alerts to fetch/process per batch (default: 30)
+SOC_CLAW_BATCH_SIZE=30
+
+# GCS polling interval in seconds (default: 300 = 5 min, 0 = disabled)
+SOC_CLAW_GCS_POLL_INTERVAL=300
+```
+
+### Architecture Diagram
+
+```
+┌─────────────────┐
+│  GCS Bucket     │
+│  (SIEM logs)    │
+└────────┬────────┘
+         │ GCS API
+         ▼
+┌─────────────────┐
+│  GCS Reader     │
+│  (list/download)│
+└────────┬────────┘
+         │
+         ├─────────────────┐
+         │                 │
+         ▼                 ▼
+┌─────────────────┐  ┌─────────────────┐
+│  GCS Poller     │  │  Dashboard      │
+│  (auto, config) │  │  (on-demand)    │
+└────────┬────────┘  └────────┬────────┘
+         │                    │
+         └──────────┬─────────┘
+                    ▼
+         ┌─────────────────┐
+         │  Pipeline      │
+         │  (triage/verify│
+         │   /response)    │
+         └────────┬────────┘
+                  │
+                  ▼
+         ┌─────────────────┐
+         │  GCP Bucket     │
+         │  (results)      │
+         └─────────────────┘
+
+Secondary path (real-time):
+┌─────────────────┐
+│  Webhook/Batch  │
+│  API            │
+└────────┬────────┘
+         │ Kafka
+         ▼
+┌─────────────────┐
+│  Kafka Consumer │
+└────────┬────────┘
+         │
+         └──────────┬─────────┐
+                    │         │
+                    ▼         ▼
+         ┌─────────────────┐  ┌─────────────────┐
+         │  Pipeline      │  │  DLQ            │
+         └────────┬────────┘  └─────────────────┘
+                  │
+                  ▼
+         ┌─────────────────┐
+         │  GCP Bucket     │
+         │  (results)      │
+         └─────────────────┘
+```
 
 ## Kafka Configuration
 
@@ -592,96 +824,141 @@ success_criteria:
 
 ## Steps (implementation detail)
 
-### Phase 1: Schema Normalization
+### Phase 1: GCS API Integration
 
-1. **Document field mappings** for target SIEM (start with Splunk as primary example)
-   - Create `soc_claw/connectors/siem_splunk.py` with `SplunkMapper` class
-   - Map Splunk fields (`_time`, `_raw`, `host`, etc.) to `Alert` schema
-   - Add missing field handling with sensible defaults
-   - Strip `ground_truth` field from production alerts
+1. **Create GCS reader module** in `soc_claw/connectors/gcs_reader.py`
+    - `get_gcs_client()` - Get GCS client using Application Default Credentials
+    - `list_alerts()` - List most recent alert objects from GCS bucket
+    - `download_alert()` - Download and parse a single alert from GCS
+    - `download_batch()` - Download and parse a batch of alerts from GCS
 
-2. **Create base mapper interface**
-   - Define `SIEMMapper` abstract base class in `soc_claw/connectors/base.py`
-   - Implement `normalize()` and `extract_source()` methods
-   - Add `NormalizationError` exception class
+2. **Create GCS poller module** in `soc_claw/connectors/gcs_poller.py`
+    - `poll_gcs()` - Background task to poll GCS for new alerts
+    - `start_gcs_poller()` - Start the GCS poller background task
+    - `stop_gcs_poller()` - Stop the GCS poller
+    - Configurable via `SOC_CLAW_GCS_POLL_INTERVAL` (0 = disabled)
 
-3. **Add mappers for other SIEMs** (as needed)
-   - `soc_claw/connectors/siem_sentinel.py` for Microsoft Sentinel
-   - `soc_claw/connectors/siem_crowdstrike.py` for CrowdStrike
-   - Follow same interface as Splunk mapper
+3. **Update dashboard route** in `soc_claw/backend/routers/pages.py`
+    - Remove `load_alerts()` import
+    - Use GCS reader to fetch most recent 30 alerts
+    - Pass real alerts to template
 
-### Phase 2: Kafka Setup
+4. **Update API routes** in `soc_claw/backend/routers/api.py`
+    - Remove `load_alerts()` import
+    - Add `get_alert()` from GCS reader
+    - Add `/api/process-batch` endpoint (POST)
+    - Add `/api/process-all` endpoint (GET, SSE streaming)
+    - Update `/api/alerts` to fetch from GCS
 
-4. **Add Kafka to docker-compose.yml**
-   - Add Kafka service (confluentinc/cp-kafka)
-   - Add Zookeeper service (confluentinc/cp-zookeeper)
-   - Configure networking and ports
-   - Set environment variables
+5. **Update dashboard template** in `soc_claw/frontend/templates/index.html`
+    - Replace "Run All 30" with two new buttons
+    - Update alert table to show real data from GCS
+    - Add "Process Latest N" button
+    - Add "Process All" button
 
-5. **Create Kafka topics** (one-time setup)
-   - Create `soc-claw-alerts` topic with 3 partitions
-   - Create `soc-claw-alerts-dlq` topic with 1 partition
-   - Document in ops playbook for production deployment
+6. **Update server startup** in `soc_claw/backend/server.py`
+    - Start GCS poller on startup if `SOC_CLAW_GCS_POLL_INTERVAL > 0`
+    - Stop GCS poller on shutdown
 
-### Phase 3: Ingress Adapters
+7. **Add environment variables** to `.env.example`
+    - `GCS_LOG_BUCKET_NAME` - GCS bucket containing SIEM logs
+    - `SOC_CLAW_BATCH_SIZE` - Max alerts per batch (default: 30)
+    - `SOC_CLAW_GCS_POLL_INTERVAL` - Polling interval in seconds (default: 300, 0 = disabled)
 
-6. **Build webhook endpoint** in `soc_claw/backend/routes/siem_webhook.py`
-   - HMAC-SHA256 verification with per-tenant secret
-   - Max-age timestamp check: reject if > 5 minutes old
-   - SIEM type detection from headers or payload
-   - Route to appropriate mapper
-   - Publish to Kafka topic (not Redis)
-   - Return `401` on invalid HMAC, `400` on malformed event
-   - Push to DLQ on normalization/validation failures
+8. **Add service account guide** to `SETUP.md`
+    - Step-by-step guide for creating service account key
+    - Instructions for setting `GOOGLE_APPLICATION_CREDENTIALS`
 
-7. **Build batch API endpoint** in `soc_claw/backend/routes/batch_api.py`
-   - `POST /api/batch/upload` - Upload JSONL file
-   - Parse JSONL file and validate each alert
-   - Create job record in Redis (for job tracking)
-   - Publish alerts to Kafka topic
-   - Return job ID immediately (asynchronous)
-   - `GET /api/batch/status/{job_id}` - Check job status
-   - `GET /api/batch/results/{job_id}` - Download results
+### Phase 2: Schema Normalization
 
-8. **Create job manager** in `soc_claw/connectors/job_manager.py`
-   - Track batch job status (pending → processing → completed/failed)
-   - Store job metadata in Redis
-   - Update job progress
-   - Store results location
+9. **Document field mappings** for target SIEM (start with Splunk as primary example)
+    - Create `soc_claw/connectors/siem_splunk.py` with `SplunkMapper` class
+    - Map Splunk fields (`_time`, `_raw`, `host`, etc.) to `Alert` schema
+    - Add missing field handling with sensible defaults
+    - Strip `ground_truth` field from production alerts
 
-### Phase 4: Kafka Consumer & Pipeline
+10. **Create base mapper interface**
+    - Define `SIEMMapper` abstract base class in `soc_claw/connectors/base.py`
+    - Implement `normalize()` and `extract_source()` methods
+    - Add `NormalizationError` exception class
 
-9. **Build Kafka consumer** in `soc_claw/connectors/kafka_consumer.py`
-   - Subscribe to `soc-claw-alerts` topic
-   - Consumer group: `soc-claw-consumers`
-   - Manual offset commit (after successful processing)
-   - Process messages concurrently
-   - Pass to pipeline
-   - Handle errors per requirements
+11. **Add mappers for other SIEMs** (as needed)
+    - `soc_claw/connectors/siem_sentinel.py` for Microsoft Sentinel
+    - `soc_claw/connectors/siem_crowdstrike.py` for CrowdStrike
+    - Follow same interface as Splunk mapper
 
-10. **Update pipeline** in `soc_claw/pipeline.py`
+### Phase 3: Kafka Setup
+
+12. **Add Kafka to docker-compose.yml**
+    - Add Kafka service (confluentinc/cp-kafka)
+    - Add Zookeeper service (confluentinc/cp-zookeeper)
+    - Configure networking and ports
+    - Set environment variables
+
+13. **Create Kafka topics** (one-time setup)
+    - Create `soc-claw-alerts` topic with 3 partitions
+    - Create `soc-claw-alerts-dlq` topic with 1 partition
+    - Document in ops playbook for production deployment
+
+### Phase 4: Ingress Adapters
+
+14. **Build webhook endpoint** in `soc_claw/backend/routes/siem_webhook.py`
+    - HMAC-SHA256 verification with per-tenant secret
+    - Max-age timestamp check: reject if > 5 minutes old
+    - SIEM type detection from headers or payload
+    - Route to appropriate mapper
+    - Publish to Kafka topic (not Redis)
+    - Return `401` on invalid HMAC, `400` on malformed event
+    - Push to DLQ on normalization/validation failures
+
+15. **Build batch API endpoint** in `soc_claw/backend/routes/batch_api.py`
+    - `POST /api/batch/upload` - Upload JSONL file
+    - Parse JSONL file and validate each alert
+    - Create job record in Redis (for job tracking)
+    - Publish alerts to Kafka topic
+    - Return job ID immediately (asynchronous)
+    - `GET /api/batch/status/{job_id}` - Check job status
+    - `GET /api/batch/results/{job_id}` - Download results
+
+16. **Create job manager** in `soc_claw/connectors/job_manager.py`
+    - Track batch job status (pending → processing → completed/failed)
+    - Store job metadata in Redis
+    - Update job progress
+    - Store results location
+
+### Phase 5: Kafka Consumer & Pipeline
+
+17. **Build Kafka consumer** in `soc_claw/connectors/kafka_consumer.py`
+    - Subscribe to `soc-claw-alerts` topic
+    - Consumer group: `soc-claw-consumers`
+    - Manual offset commit (after successful processing)
+    - Process messages concurrently
+    - Pass to pipeline
+    - Handle errors per requirements
+
+18. **Update pipeline** in `soc_claw/pipeline.py`
     - Remove `load_alerts()` function (no longer needed)
     - Remove `load_alerts_from_queue()` function (no longer needed)
     - Remove `ALERT_SOURCE` feature flag (no longer needed)
     - Keep `run_pipeline()` function
     - Keep `execute_approved_action()` function
 
-### Phase 5: Output & DLQ
+### Phase 6: Output & DLQ
 
-11. **Build GCP output API** in `soc_claw/connectors/output_gcp.py`
+19. **Build GCP output API** in `soc_claw/connectors/output_gcp.py`
     - Accept pipeline results
     - Write to GCP Bucket (JSONL format)
     - File organization: `realtime/{year}/{month}/{day}/{hour}/alerts_{timestamp}.jsonl`
     - Handle authentication (service account key)
     - Retry on failure (3 retries, 30s delay)
 
-12. **Build DLQ handler** in `soc_claw/connectors/dlq_kafka.py`
+20. **Build DLQ handler** in `soc_claw/connectors/dlq_kafka.py`
     - Separate Kafka topic: `soc-claw-alerts-dlq`
     - Write failed alerts with error details
     - Error classification: `INVALID_JSON`, `SCHEMA_VALIDATION`, `NORMALIZATION_FAILURE`, `PIPELINE_TIMEOUT`, `AGENT_UNAVAILABLE`, `SERVICE_UNAVAILABLE`
     - Write DLQ entries to GCP Bucket
 
-13. **Build DLQ reprocessor** in `soc_claw/connectors/dlq_reprocessor.py`
+21. **Build DLQ reprocessor** in `soc_claw/connectors/dlq_reprocessor.py`
     - Read from DLQ topic
     - Attempt to reprocess failed alerts
     - Max retries: 3
@@ -689,67 +966,80 @@ success_criteria:
     - On success: write to main topic
     - On failure: increment retry count and keep in DLQ
 
-### Phase 6: Error Handling
+### Phase 7: Error Handling
 
-14. **Implement error handling strategy**
+22. **Implement error handling strategy**
     - Log parsing errors → DLQ
     - Agent down → Stop pipeline with error message
     - Service not started → Retry 3 times with 30s delay
     - Pipeline timeout → DLQ, continue processing next alert
 
-### Phase 7: Monitoring & Testing
+### Phase 8: Monitoring & Testing
 
-15. **Add OpenTelemetry instrumentation**
+23. **Add OpenTelemetry instrumentation**
     - Kafka consumer lag metric
     - Ingestion/processing rate counters
     - Latency histograms
     - DLQ rate counter
     - GCP upload success/failure metrics
     - Batch job metrics
+    - GCS poller metrics
 
-16. **Add structured logging**
+24. **Add structured logging**
     - Alert ingestion events
     - Normalization warnings
     - DLQ entries
     - Kafka consumer events
     - GCP upload events
+    - GCS poller events
 
-17. **Create GCP Cloud Monitoring alert policies**
+25. **Create GCP Cloud Monitoring alert policies**
     - Consumer lag > 10000 for 5min
     - DLQ rate > 10/min for 5min
     - Processing latency p95 > 30s
     - GCP upload failures > 5/min for 5min
 
-18. **Write comprehensive tests**
+26. **Write comprehensive tests**
     - Unit: HMAC verification, schema normalization, error classification
     - Integration: Kafka → pipeline → GCP, webhook → Kafka → pipeline → GCP
     - Batch API: JSONL upload, job tracking, results download
     - Error cases: Invalid HMAC → 401, malformed event → DLQ, agent down → stop pipeline
     - Performance: 1000 alerts/sec for 5min, verify consumer lag, verify GCP upload
+    - GCS reader: list, download, batch operations
+    - GCS poller: polling behavior, error handling
 
-### Phase 8: Configuration
+### Phase 9: Configuration
 
-19. **Update `.env.example`**
+27. **Update `.env.example`**
     - Add Kafka configuration
     - Add GCP configuration
+    - Add GCS configuration
     - Add batch API configuration
     - Add error handling configuration
     - Add DLQ reprocessing configuration
 
-20. **Update docker-compose.yml**
+28. **Update docker-compose.yml**
     - Add Kafka service
     - Add Zookeeper service
     - Update environment variables
     - Configure networking
 
-### Phase 9: Documentation
+### Phase 10: Documentation
 
-21. **Update ops documentation**
+29. **Update ops documentation**
     - Kafka topic management
     - Consumer lag monitoring
     - DLQ inspection and reprocessing
     - Webhook secret rotation procedure
     - GCP Bucket management
+    - GCS poller configuration
+    - Service account key management
+
+30. **Update plan document**
+    - Reflect GCS API as primary source
+    - Update architecture diagram
+    - Document new API endpoints
+    - Document dashboard buttons
 
 ## Acceptance criteria
 
@@ -854,6 +1144,12 @@ success_criteria:
 
 ### Resolved
 
+- **Primary source of alerts** → GCS Bucket via GCS API (https://storage.googleapis.com/storage/v1/)
+- **Dashboard data source** → GCS Bucket (most recent 30 alerts)
+- **Alert analysis** → Show processed result from GCP (no re-run)
+- **Processing mode** → Polling (auto, configurable) + On-demand (dashboard buttons)
+- **Dashboard buttons** → "Process Latest N" (on-demand batch) + "Process All" (real-time SSE streaming)
+- **Kafka consumer** → Keep for webhook/batch API real-time ingestion
 - **Which SIEM platform is the first integration target** → Splunk (primary example), with Sentinel and CrowdStrike mappers as needed
 - **DLQ retention policy and re-processing** → 7-day retention in Kafka; automatic reprocessing (max 3 retries)
 - **Alert volume expectations** → 1000 alerts/sec peak, 200 alerts/sec average (industry standard for enterprise SOC)
@@ -861,7 +1157,7 @@ success_criteria:
 - **Output destination** → GCP Bucket (JSONL format)
 - **Batch API behavior** → Asynchronous (returns job ID immediately)
 - **Retry policy** → 3 retries with 30s delay for service unavailability
-- **Architecture** → Simplified: Webhook/Batch API → Kafka → Pipeline → GCP Bucket
+- **Architecture** → GCS API (primary) + Webhook/Batch API (secondary) → Kafka → Pipeline → GCP Bucket
 
 ### Remaining Unknowns
 
@@ -870,6 +1166,8 @@ success_criteria:
 - **Webhook endpoint URL** → Depends on customer DNS and load balancer configuration; will be documented in deployment guide
 - **Secret rotation cadence** → Per-tenant webhook secret rotation frequency depends on customer security policy; will be documented as procedure
 - **GCP Bucket naming** → Bucket name and location depend on customer GCP project; will be configured per deployment
+- **GCS log file format** → Exact format of SIEM log files in GCS (JSONL, JSON, etc.) will be discovered during integration
+- **GCS polling interval** → Optimal polling interval depends on SIEM log generation rate; configurable via environment variable
 
 ### Deferred to v2
 
@@ -877,3 +1175,4 @@ success_criteria:
 - **Alert deduplication beyond simple idempotency** → Complex deduplication (correlation, merging) deferred to v2
 - **SIEM-side rule authoring** → Out of scope for this plan; handled by customer SIEM team
 - **Batch API synchronous processing** → Asynchronous processing (job ID) is sufficient for v1
+- **GCS poller cancellation** → Basic start/stop sufficient for v1; graceful shutdown deferred to v2

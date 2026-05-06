@@ -73,11 +73,14 @@
         <div class="flex justify-between items-end mb-8">
             <div>
                 <h1 class="font-display text-[32px] font-black text-on-surface mb-1">Incident Overview</h1>
-                <p class="text-on-surface-variant text-sm">30 synthetic SIEM alerts — select one to analyze</p>
+                <p class="text-on-surface-variant text-sm">SIEM alerts from GCS — select one to analyze</p>
             </div>
             <div class="flex gap-3">
-                <button onclick="showView('benchmark')" class="bg-[#151515] text-white px-5 py-2.5 rounded-lg flex items-center gap-2 text-xs uppercase tracking-wider font-bold hover:bg-zinc-800 transition-all">
-                    <span class="material-symbols-outlined text-[18px]">play_arrow</span>Run All 30
+                <button onclick="processLatestBatch()" class="bg-[#151515] text-white px-5 py-2.5 rounded-lg flex items-center gap-2 text-xs uppercase tracking-wider font-bold hover:bg-zinc-800 transition-all">
+                    <span class="material-symbols-outlined text-[18px]">play_arrow</span>Process Latest 30
+                </button>
+                <button onclick="showView('benchmark')" class="bg-red-600 text-white px-5 py-2.5 rounded-lg flex items-center gap-2 text-xs uppercase tracking-wider font-bold hover:bg-red-700 transition-all">
+                    <span class="material-symbols-outlined text-[18px]">play_arrow</span>Process All
                 </button>
             </div>
         </div>
@@ -89,32 +92,32 @@
                     <span class="text-[10px] uppercase tracking-wider font-bold text-zinc-500">Total Alerts</span>
                     <span class="material-symbols-outlined text-zinc-400 text-[20px]">monitoring</span>
                 </div>
-                <div class="text-3xl font-display font-black">30</div>
-                <div class="mt-1 text-[10px] text-zinc-500">Synthetic SIEM dataset</div>
+                <div class="text-3xl font-display font-black" id="total-alerts-count">0</div>
+                <div class="mt-1 text-[10px] text-zinc-500">From GCS Bucket</div>
             </div>
             <div class="bg-white border border-red-200 p-5 rounded-lg shadow-sm border-l-4 border-l-red-600">
                 <div class="flex items-center justify-between mb-3">
-                    <span class="text-[10px] uppercase tracking-wider font-bold text-red-600">True Positives</span>
+                    <span class="text-[10px] uppercase tracking-wider font-bold text-red-600">P1 Critical</span>
                     <span class="material-symbols-outlined text-red-600 text-[20px]">priority_high</span>
                 </div>
-                <div class="text-3xl font-display font-black text-red-600">10</div>
-                <div class="mt-1 text-[10px] text-red-500">ALT-001 — ALT-010</div>
+                <div class="text-3xl font-display font-black" id="p1-count">0</div>
+                <div class="mt-1 text-[10px] text-red-500">Immediate action required</div>
             </div>
             <div class="bg-white border border-zinc-200 p-5 rounded-lg shadow-sm border-l-4 border-l-green-600">
                 <div class="flex items-center justify-between mb-3">
-                    <span class="text-[10px] uppercase tracking-wider font-bold text-green-600">False Positives</span>
+                    <span class="text-[10px] uppercase tracking-wider font-bold text-green-600">P2 High</span>
                     <span class="material-symbols-outlined text-green-600 text-[20px]">check_circle</span>
                 </div>
-                <div class="text-3xl font-display font-black text-green-600">10</div>
-                <div class="mt-1 text-[10px] text-zinc-500">ALT-011 — ALT-020</div>
+                <div class="text-3xl font-display font-black" id="p2-count">0</div>
+                <div class="mt-1 text-[10px] text-zinc-500">Escalated</div>
             </div>
             <div class="bg-white border border-zinc-200 p-5 rounded-lg shadow-sm border-l-4 border-l-blue-600">
                 <div class="flex items-center justify-between mb-3">
-                    <span class="text-[10px] uppercase tracking-wider font-bold text-blue-600">Ambiguous</span>
+                    <span class="text-[10px] uppercase tracking-wider font-bold text-blue-600">P3/P4</span>
                     <span class="material-symbols-outlined text-blue-600 text-[20px]">help</span>
                 </div>
-                <div class="text-3xl font-display font-black text-blue-600">10</div>
-                <div class="mt-1 text-[10px] text-zinc-500">ALT-021 — ALT-030</div>
+                <div class="text-3xl font-display font-black" id="p3p4-count">0</div>
+                <div class="mt-1 text-[10px] text-zinc-500">Medium/Low priority</div>
             </div>
         </div>
 
@@ -149,9 +152,15 @@
                             <td class="px-5 py-3 text-xs text-zinc-600">{{ alert.hostname }}</td>
                             <td class="px-5 py-3 text-xs text-zinc-500">{{ alert.timestamp }}</td>
                             <td class="px-5 py-3">
+                                {% if alert.ground_truth %}
                                 <span class="inline-flex items-center px-2 py-0.5 sev-{{ alert.ground_truth.severity | lower }} text-white text-[10px] font-black rounded uppercase">
                                     {{ alert.ground_truth.severity }}
                                 </span>
+                                {% else %}
+                                <span class="inline-flex items-center px-2 py-0.5 sev-{{ alert.severity | lower if alert.severity else 'p3' }} text-white text-[10px] font-black rounded uppercase">
+                                    {{ alert.severity if alert.severity else 'P3' }}
+                                </span>
+                                {% endif %}
                             </td>
                             <td class="px-5 py-3 text-right">
                                 <button class="text-zinc-400 group-hover:text-red-600 transition-colors">
@@ -599,6 +608,34 @@ async function overrideSeverity() {
     if (currentResult) { currentResult.response_plan = resp; renderResponse(currentResult); }
 }
 
+// ──────── Process Latest Batch ────────
+// Process latest N alerts from GCS and show results in table
+async function processLatestBatch() {
+    setStatus('Processing latest batch...', true);
+
+    try {
+        const res = await fetch('/api/process-batch', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ batch_size: 30 }) });
+        const data = await res.json();
+
+        if (data.error) {
+            alert('Error: ' + data.error);
+            setStatus('Error', false);
+            return;
+        }
+
+        // Show results in a modal or alert
+        alert(`Processed ${data.count} alerts successfully!`);
+        setStatus('Complete', false);
+
+        // Refresh the dashboard to show updated stats
+        location.reload();
+    } catch (e) {
+        console.error('processLatestBatch failed', e);
+        alert('Failed to process batch: ' + e.message);
+        setStatus('Error', false);
+    }
+}
+
 // ──────── Run All 30 ────────
 // Streams per-alert progress over Server-Sent Events. The backend yields
 // three event types:
@@ -743,6 +780,38 @@ function renderBenchmark(data) {
             </tr></thead><tbody>${rows}</tbody></table>
         </div>`;
 }
+
+// ──────── Update Dashboard Stats ────────
+// Update the stats on the dashboard based on the alerts data
+function updateDashboardStats() {
+    // Get all alerts from the table
+    const rows = document.querySelectorAll('#view-dashboard tbody tr');
+    const total = rows.length;
+    let p1 = 0, p2 = 0, p3p4 = 0;
+
+    rows.forEach(row => {
+        const severityCell = row.querySelector('td:nth-child(6) span');
+        if (severityCell) {
+            const severity = severityCell.textContent.trim();
+            if (severity === 'P1') p1++;
+            else if (severity === 'P2') p2++;
+            else p3p4++;
+        }
+    });
+
+    // Update the stats
+    document.getElementById('total-alerts-count').textContent = total;
+    document.getElementById('p1-count').textContent = p1;
+    document.getElementById('p2-count').textContent = p2;
+    document.getElementById('p3p4-count').textContent = p3p4;
+}
+
+// Update stats when dashboard loads
+document.addEventListener('DOMContentLoaded', function() {
+    if (document.getElementById('view-dashboard')) {
+        updateDashboardStats();
+    }
+});
 </script>
 </body>
 </html>

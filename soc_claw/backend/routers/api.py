@@ -10,32 +10,121 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from soc_claw.audit import log_analyst_action
 from soc_claw.pipeline import (
     execute_approved_action,
-    get_alert_by_id,
-    load_alerts,
     run_pipeline,
 )
 from soc_claw.agents.response_agent import run_response
+from soc_claw.connectors.gcs_reader import download_batch
 
 logger = logging.getLogger("soc-claw.server.api")
 router = APIRouter(prefix="/api", tags=["api"])
 
 
 @router.get("/alerts")
-async def api_alerts():
-    return load_alerts()
+async def api_alerts(request: Request):
+    """Get most recent alerts from GCS."""
+    bucket_name = request.app.state.env.get("GCS_LOG_BUCKET_NAME", "")
+    if bucket_name:
+        alerts = download_batch(bucket_name, max_results=30)
+    else:
+        alerts = []
+    return alerts
 
 
 @router.get("/alerts/{alert_id}")
-async def api_alert(alert_id: str):
-    alert = get_alert_by_id(alert_id)
+async def api_alert(alert_id: str, request: Request):
+    """Get alert by ID from GCS."""
+    bucket_name = request.app.state.env.get("GCS_LOG_BUCKET_NAME", "")
+    if not bucket_name:
+        return JSONResponse({"error": "GCS bucket not configured"}, status_code=500)
+
+    from soc_claw.connectors.gcs_reader import download_alert
+
+    alert = download_alert(bucket_name, alert_id)
     if not alert:
         return JSONResponse({"error": "Alert not found"}, status_code=404)
+
     return alert
+
+
+@router.post("/process-batch")
+async def api_process_batch(request: Request):
+    """Process latest N alerts from GCS and return results."""
+    bucket_name = request.app.state.env.get("GCS_LOG_BUCKET_NAME", "")
+    if not bucket_name:
+        return JSONResponse({"error": "GCS bucket not configured"}, status_code=500)
+
+    body = {}
+    try:
+        body = await request.json()
+    except Exception:
+        pass
+
+    batch_size = body.get("batch_size", int(os.environ.get("SOC_CLAW_BATCH_SIZE", "30")))
+
+    alerts = download_batch(bucket_name, max_results=batch_size)
+    results = []
+
+    for alert in alerts:
+        try:
+            result = await run_pipeline(alert)
+            results.append(result)
+        except Exception as e:
+            logger.error(f"Failed to process alert {alert.get('id')}: {e}")
+            results.append({"error": str(e), "alert_id": alert.get("id")})
+
+    return {"results": results, "count": len(results)}
+
+
+@router.get("/process-all")
+async def api_process_all(request: Request):
+    """Process ALL alerts from GCS with real-time SSE streaming."""
+    bucket_name = request.app.state.env.get("GCS_LOG_BUCKET_NAME", "")
+    if not bucket_name:
+        return JSONResponse({"error": "GCS bucket not configured"}, status_code=500)
+
+    alerts = download_batch(bucket_name, max_results=1000)  # Fetch up to 1000 alerts
+    total = len(alerts)
+    concurrency = max(1, int(os.environ.get("SOC_CLAW_CONCURRENCY", "5")))
+
+    async def stream():
+        agg = _RunAllAggregator()
+        started_at = time.perf_counter()
+        yield _format_sse_event("start", {"total": total, "concurrency": concurrency})
+
+        sem = asyncio.Semaphore(concurrency)
+        tasks = [
+            asyncio.create_task(_process_alert_for_stream(a, sem))
+            for a in alerts
+        ]
+        completed = 0
+        for fut in asyncio.as_completed(tasks):
+            row = await fut
+            completed += 1
+            agg.add(row)
+            yield _format_sse_event("result", {**row, "completed": completed})
+
+        elapsed = time.perf_counter() - started_at
+        yield _format_sse_event("summary", agg.summary(total, elapsed))
+
+    return StreamingResponse(
+        stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @router.post("/run/{alert_id}")
 async def api_run(alert_id: str, request: Request):
-    alert = get_alert_by_id(alert_id)
+    bucket_name = request.app.state.env.get("GCS_LOG_BUCKET_NAME", "")
+    if not bucket_name:
+        return JSONResponse({"error": "GCS bucket not configured"}, status_code=500)
+
+    from soc_claw.connectors.gcs_reader import download_alert
+
+    alert = download_alert(bucket_name, alert_id)
     if not alert:
         return JSONResponse({"error": "Alert not found"}, status_code=404)
 
@@ -99,7 +188,7 @@ class _RunAllAggregator:
 
 
 async def _process_alert_for_stream(alert: dict, sem: asyncio.Semaphore) -> dict:
-    gt_sev = alert["ground_truth"]["severity"]
+    gt_sev = alert.get("ground_truth", {}).get("severity", "P3")
     async with sem:
         try:
             result = await run_pipeline(alert)
@@ -131,42 +220,6 @@ async def _process_alert_for_stream(alert: dict, sem: asyncio.Semaphore) -> dict
             }
 
 
-@router.get("/run-all")
-async def api_run_all():
-    alerts = load_alerts()
-    total = len(alerts)
-    concurrency = max(1, int(os.environ.get("SOC_CLAW_CONCURRENCY", "5")))
-
-    async def stream():
-        agg = _RunAllAggregator()
-        started_at = time.perf_counter()
-        yield _format_sse_event("start", {"total": total, "concurrency": concurrency})
-
-        sem = asyncio.Semaphore(concurrency)
-        tasks = [
-            asyncio.create_task(_process_alert_for_stream(a, sem))
-            for a in alerts
-        ]
-        completed = 0
-        for fut in asyncio.as_completed(tasks):
-            row = await fut
-            completed += 1
-            agg.add(row)
-            yield _format_sse_event("result", {**row, "completed": completed})
-
-        elapsed = time.perf_counter() - started_at
-        yield _format_sse_event("summary", agg.summary(total, elapsed))
-
-    return StreamingResponse(
-        stream(),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "X-Accel-Buffering": "no",
-        },
-    )
-
-
 @router.post("/approve")
 async def api_approve(request: Request):
     body = await request.json()
@@ -188,7 +241,13 @@ async def api_override(request: Request):
     body = await request.json()
     alert_id = body.get("alert_id")
     severity = body.get("severity")
-    alert = get_alert_by_id(alert_id)
+    bucket_name = request.app.state.env.get("GCS_LOG_BUCKET_NAME", "")
+    if not bucket_name:
+        return JSONResponse({"error": "GCS bucket not configured"}, status_code=500)
+
+    from soc_claw.connectors.gcs_reader import download_alert
+
+    alert = download_alert(bucket_name, alert_id)
     if not alert:
         return JSONResponse({"error": "Alert not found"}, status_code=404)
 

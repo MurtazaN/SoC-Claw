@@ -143,7 +143,7 @@ async def upload_batch(file: UploadFile):
     # Publish alerts to Kafka
     from soc_claw.connectors.kafka_producer import get_kafka_producer
 
-    producer = get_kafka_producer()
+    producer = await get_kafka_producer()
     if not producer:
         await job_manager.update_status(
             job_id,
@@ -252,7 +252,7 @@ async def get_job_results(job_id: str):
         raise HTTPException(status_code=503, detail="Redis not available")
 
     job_manager = JobManager(redis)
-    job_data = await job_manager.get_job_id)
+    job_data = await job_manager.get_job(job_id)
 
     if not job_data:
         raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
@@ -271,14 +271,10 @@ async def get_job_results(job_id: str):
         )
 
     # Read results from GCP Bucket
-    from soc_claw.connectors.output_gcp import get_gcp_client
-
-    gcp_client = get_gcp_client()
-    if not gcp_client:
-        raise HTTPException(status_code=503, detail="GCP client not available")
+    from soc_claw.connectors.output_gcp import download_results
 
     try:
-        results = await gcp_client.download(results_location)
+        results = await download_results(results_location)
         return results
     except Exception as e:
         logger.error(f"Failed to download results for job {job_id}: {e}")

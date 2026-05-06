@@ -64,8 +64,8 @@ class JobManager:
         }
 
         key = f"{self.key_prefix}{job_id}"
-        await redis.hset(key, mapping=job_data)
-        await redis.expire(key, 86400)  # 24 hours TTL
+        await self.redis.hset(key, mapping=job_data)
+        await self.redis.expire(key, 86400)  # 24 hours TTL
 
         logger.info(f"Created job {job_id} for {alert_count} alerts from {file_name}")
         return job_id
@@ -94,7 +94,7 @@ class JobManager:
         """
         key = f"{self.key_prefix}{job_id}"
 
-        exists = await redis.exists(key)
+        exists = await self.redis.exists(key)
         if not exists:
             logger.warning(f"Job {job_id} not found")
             return False
@@ -113,7 +113,7 @@ class JobManager:
         if error_message is not None:
             updates["error_message"] = error_message
 
-        await redis.hset(key, mapping=updates)
+        await self.redis.hset(key, mapping=updates)
         logger.info(f"Updated job {job_id} to {status}")
         return True
 
@@ -128,11 +128,11 @@ class JobManager:
         """
         key = f"{self.key_prefix}{job_id}"
 
-        exists = await redis.exists(key)
+        exists = await self.redis.exists(key)
         if not exists:
             return None
 
-        job_data = await redis.hgetall(key)
+        job_data = await self.redis.hgetall(key)
         return job_data
 
     async def increment_processed(self, job_id: str) -> int:
@@ -146,8 +146,8 @@ class JobManager:
         """
         key = f"{self.key_prefix}{job_id}"
 
-        count = await redis.hincrby(key, "processed_count", 1)
-        await redis.hset(key, mapping={"updated_at": datetime.now(timezone.utc).isoformat()})
+        count = await self.redis.hincrby(key, "processed_count", 1)
+        await self.redis.hset(key, mapping={"updated_at": datetime.now(timezone.utc).isoformat()})
 
         return count
 
@@ -162,8 +162,8 @@ class JobManager:
         """
         key = f"{self.key_prefix}{job_id}"
 
-        count = await redis.hincrby(key, "failed_count", 1)
-        await redis.hset(key, mapping={"updated_at": datetime.now(timezone.utc).isoformat()})
+        count = await self.redis.hincrby(key, "failed_count", 1)
+        await self.redis.hset(key, mapping={"updated_at": datetime.now(timezone.utc).isoformat()})
 
         return count
 
@@ -178,10 +178,10 @@ class JobManager:
         """
         key = f"{self.key_prefix}{job_id}"
 
-        exists = await redis.exists(key)
+        exists = await self.redis.exists(key)
         if not exists:
             return False
 
-        await redis.delete(key)
+        await self.redis.delete(key)
         logger.info(f"Deleted job {job_id}")
         return True

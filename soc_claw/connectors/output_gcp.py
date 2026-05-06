@@ -75,7 +75,7 @@ async def upload_result(result: dict) -> bool:
 
         # Generate file path based on timestamp
         dt = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
-        path = f"realtime/{dt.year:02d}/{dt.month:02d}/{dt.hour:02d}/alerts_{dt.strftime('%Y%m%d%H%M%S')}.jsonl"
+        path = f"realtime/{dt.year:04d}/{dt.month:02d}/{dt.day:02d}/alerts_{dt.strftime('%Y%m%d%H%M%S')}.jsonl"
 
         # Prepare content
         if OUTPUT_FORMAT == "jsonl":

@@ -12,6 +12,8 @@ class ErrorType(Enum):
     NORMALIZATION_FAILURE = "normalization"
     IDEMPOTENCY_CHECK = "idempotency"
     HMAC_VERIFICATION = "hmac_verification"
+    PIPELINE_TIMEOUT = "pipeline_timeout"
+    SERVICE_UNAVAILABLE = "service_unavailable"
 
 
 class NormalizationError(Exception):
