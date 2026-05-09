@@ -1,6 +1,6 @@
 import json
 
-from soc_claw.audit import log_response_plan
+from soc_claw.observability.audit import log_response_plan
 from soc_claw.llm import call_llm
 from soc_claw.schemas import ResponsePlan
 

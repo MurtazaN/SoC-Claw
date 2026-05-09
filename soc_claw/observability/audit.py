@@ -2,7 +2,7 @@
 
 Each function emits a structured log record via Python's ``logging``
 module with an ``extra`` dict.  The JSON formatter configured in
-``soc_claw.logging_config`` serializes these as top-level keys, making
+``soc_claw.observability.logging_config`` serializes these as top-level keys, making
 them queryable in log aggregators (Loki, Datadog, CloudWatch) without
 regex parsing.
 """

@@ -12,7 +12,7 @@ from pathlib import Path
 
 import yaml
 
-CONFIG_DIR = Path(__file__).parent / "config"
+CONFIG_DIR = Path(__file__).parent
 
 
 @lru_cache(maxsize=1)

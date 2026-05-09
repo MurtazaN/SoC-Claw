@@ -24,8 +24,8 @@ from guard import SecurityMiddleware
 from starlette_csrf import CSRFMiddleware
 
 from soc_claw.backend.security import build_csp_header, build_security_config
-from soc_claw.logging_config import setup_logging
-from soc_claw.telemetry import setup_tracing
+from soc_claw.observability.logging_config import setup_logging
+from soc_claw.observability.telemetry import setup_tracing
 
 # Observability bootstrap. MUST run before FastAPI(...) is constructed
 # so FastAPIInstrumentor's class-level patch covers the app instance.

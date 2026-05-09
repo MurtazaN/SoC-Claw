@@ -4,8 +4,8 @@ After the SRP refactor (see docs/CLEAN_CODE_SOLID_REVIEW.md, S1), the
 functionality that lived here has been split into focused modules:
 
 - ``soc_claw.llm``       — LLM client, call scaffold, JSON extraction
-- ``soc_claw.routing``   — privacy-aware inference routing
-- ``soc_claw.audit``     — structured audit logging helpers
+- ``soc_claw.config.routing``   — privacy-aware inference routing
+- ``soc_claw.observability.audit``     — structured audit logging helpers
 
 This file re-exports every public name so existing ``from soc_claw.utils
 import X`` statements continue to work unchanged.  New code should import
@@ -20,14 +20,14 @@ from soc_claw.llm.client import (  # noqa: F401
 )
 from soc_claw.llm.caller import call_llm  # noqa: F401
 
-# ── Re-exports from soc_claw.routing ──────────────────────────────
-from soc_claw.routing import (  # noqa: F401
+# ── Re-exports from soc_claw.config.routing ──────────────────────────────
+from soc_claw.config.routing import (  # noqa: F401
     load_privacy_routes,
     route_request,
 )
 
-# ── Re-exports from soc_claw.audit ────────────────────────────────
-from soc_claw.audit import (  # noqa: F401
+# ── Re-exports from soc_claw.observability.audit ────────────────────────────────
+from soc_claw.observability.audit import (  # noqa: F401
     log_analyst_action,
     log_inference,
     log_response_plan,

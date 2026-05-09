@@ -357,8 +357,8 @@ async def run_benchmark(max_alerts: int = 30) -> dict:
 
 
 if __name__ == "__main__":
-    from soc_claw.logging_config import setup_logging
-    from soc_claw.telemetry import setup_tracing
+    from soc_claw.observability.logging_config import setup_logging
+    from soc_claw.observability.telemetry import setup_tracing
 
     # Default WARNING keeps the summary table readable; override with
     # SOC_CLAW_LOG_LEVEL=INFO for CI / production where the JSON stream

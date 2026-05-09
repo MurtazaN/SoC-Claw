@@ -8,7 +8,7 @@ optional default factory → metadata attachment.
 import time
 from typing import NamedTuple
 
-from soc_claw.audit import log_inference, log_routing_decision
+from soc_claw.observability.audit import log_inference, log_routing_decision
 from soc_claw.llm.client import select_endpoint, guided_json_kwargs
 from soc_claw.llm.json_extract import extract_json
 import logging
@@ -76,7 +76,7 @@ async def call_llm(
     LLMResult
         NamedTuple containing result dict, inference_ms, route, and raw_content.
     """
-    from soc_claw.telemetry import get_tracer
+    from soc_claw.observability.telemetry import get_tracer
     tracer = get_tracer()
 
     # ── Resolve endpoint from routing.yaml ─────────────────────

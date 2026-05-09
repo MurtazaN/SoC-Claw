@@ -1,7 +1,7 @@
 import json
 import time
 
-from soc_claw.audit import log_tool_call
+from soc_claw.observability.audit import log_tool_call
 from soc_claw.llm import call_llm
 from soc_claw.schemas import TriageVerdict
 from soc_claw.tools import registry
@@ -53,7 +53,7 @@ async def _run_enrichment(alert: dict) -> tuple[dict, list]:
     """
     import asyncio
 
-    from soc_claw.telemetry import get_tracer
+    from soc_claw.observability.telemetry import get_tracer
     tracer = get_tracer()
 
     tool_calls_log = []

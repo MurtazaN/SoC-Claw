@@ -34,9 +34,9 @@ from pathlib import Path
 from soc_claw.agents.triage_agent import run_triage
 from soc_claw.agents.verifier_agent import run_verification
 from soc_claw.agents.response_agent import run_response
-from soc_claw.telemetry import get_tracer
+from soc_claw.observability.telemetry import get_tracer
 from soc_claw.tools import response_tools
-from soc_claw.audit import log_analyst_action
+from soc_claw.observability.audit import log_analyst_action
 
 logger = logging.getLogger("soc-claw.pipeline")
 

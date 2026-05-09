@@ -7,7 +7,7 @@ import time
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
-from soc_claw.audit import log_analyst_action
+from soc_claw.observability.audit import log_analyst_action
 from soc_claw.pipeline import (
     execute_approved_action,
     run_pipeline,

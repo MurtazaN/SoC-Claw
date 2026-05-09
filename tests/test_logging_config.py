@@ -1,4 +1,4 @@
-"""Sanity tests for ``soc_claw.logging_config``.
+"""Sanity tests for ``soc_claw.observability.logging_config``.
 
 Verify that ``setup_logging()`` produces parseable JSON lines and that
 ``extra={}`` fields land as top-level keys, since aggregator queries
@@ -8,7 +8,7 @@ depend on that contract.
 import json
 import logging
 
-from soc_claw.logging_config import setup_logging
+from soc_claw.observability.logging_config import setup_logging
 
 
 def test_emits_json_lines(capsys):
