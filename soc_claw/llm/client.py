@@ -17,6 +17,13 @@ load_dotenv()
 
 CONFIG_PATH = Path(__file__).parent.parent / "config" / "routing.yaml"
 
+# Per-request timeout for every LLM call. The OpenAI SDK default is 600s,
+# which lets a stuck endpoint masquerade as "still working" for 10 minutes.
+# 60s is generous for a single chat-completion round trip — even Ollama
+# cold-starts on a 7B model finish under that — while failing fast when
+# something is genuinely wedged. Override per-deploy via SOC_CLAW_LLM_TIMEOUT.
+LLM_TIMEOUT_SECONDS = float(os.environ.get("SOC_CLAW_LLM_TIMEOUT", "60"))
+
 
 @lru_cache(maxsize=1)
 def _load_config() -> dict:
@@ -30,7 +37,11 @@ def _client_for(cfg: dict, provider_name: str) -> AsyncOpenAI:
     provider = cfg["providers"][provider_name]
     base_url = provider["base_url"]
     api_key = os.environ.get(provider["api_key_env"], "dummy-key")
-    return AsyncOpenAI(base_url=base_url, api_key=api_key)
+    return AsyncOpenAI(
+        base_url=base_url,
+        api_key=api_key,
+        timeout=LLM_TIMEOUT_SECONDS,
+    )
 
 
 def select_endpoint(agent: str, prompt: str) -> tuple[AsyncOpenAI, str, str]:

@@ -116,23 +116,24 @@ async def api_process_all(request: Request):
     )
 
 
-@router.post("/run/{alert_id}")
-async def api_run(alert_id: str, request: Request):
-    bucket_name = request.app.state.env.get("GCS_LOG_BUCKET_NAME", "")
-    if not bucket_name:
-        return JSONResponse({"error": "GCS bucket not configured"}, status_code=500)
+@router.post("/run")
+async def api_run(request: Request):
+    """Run the pipeline on an alert supplied in the request body.
 
-    from soc_claw.connectors.gcs_reader import download_alert
+    The dashboard already holds every visible alert in JS state, so we
+    skip the round-trip through GCS — it's slower, costs an extra API
+    call per click, and forced an awkward {alert_id} URL contract that
+    doesn't survive JSONL files where blob name ≠ alert id.
 
-    alert = download_alert(bucket_name, alert_id)
-    if not alert:
-        return JSONResponse({"error": "Alert not found"}, status_code=404)
-
-    body = {}
-    try:
-        body = await request.json()
-    except Exception:
-        pass
+    Body shape: ``{"alert": {...}, "steering_context": "..."}``.
+    """
+    body = await request.json()
+    alert = body.get("alert")
+    if not isinstance(alert, dict):
+        return JSONResponse(
+            {"error": "Request body must include an 'alert' object"},
+            status_code=400,
+        )
     steering = body.get("steering_context")
 
     try:
@@ -142,7 +143,7 @@ async def api_run(alert_id: str, request: Request):
                 result[key].pop("_raw_response", None)
         return result
     except Exception as e:
-        logger.exception("api_run failed for %s", alert_id)
+        logger.exception("api_run failed for %s", alert.get("id", "unknown"))
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
@@ -238,19 +239,27 @@ async def api_approve(request: Request):
 
 @router.post("/override")
 async def api_override(request: Request):
+    """Override an alert's severity using the alert dict from JS state.
+
+    Body shape: ``{"alert": {...}, "severity": "P1|P2|P3|P4"}``.
+    Same rationale as ``/api/run``: skip the GCS round-trip; the
+    dashboard already has the alert.
+    """
     body = await request.json()
-    alert_id = body.get("alert_id")
+    alert = body.get("alert")
     severity = body.get("severity")
-    bucket_name = request.app.state.env.get("GCS_LOG_BUCKET_NAME", "")
-    if not bucket_name:
-        return JSONResponse({"error": "GCS bucket not configured"}, status_code=500)
+    if not isinstance(alert, dict):
+        return JSONResponse(
+            {"error": "Request body must include an 'alert' object"},
+            status_code=400,
+        )
+    if not severity:
+        return JSONResponse(
+            {"error": "Request body must include 'severity'"},
+            status_code=400,
+        )
 
-    from soc_claw.connectors.gcs_reader import download_alert
-
-    alert = download_alert(bucket_name, alert_id)
-    if not alert:
-        return JSONResponse({"error": "Alert not found"}, status_code=404)
-
+    alert_id = alert.get("id", "unknown")
     analyst = getattr(request.state, "user", "unknown")
     log_analyst_action(alert_id, "override", f"Set severity to {severity} (by {analyst})")
 

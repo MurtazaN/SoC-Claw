@@ -145,7 +145,7 @@
                     </thead>
                     <tbody class="divide-y divide-zinc-100">
                         {% for alert in alerts %}
-                        <tr class="hover:bg-zinc-50 transition-colors cursor-pointer group" onclick="analyzeAlert('{{ alert.id }}')">
+                        <tr class="hover:bg-zinc-50 transition-colors cursor-pointer group" onclick="analyzeAlertById('{{ alert.id }}')">
                             <td class="px-5 py-3 font-mono text-xs text-zinc-500">{{ alert.id }}</td>
                             <td class="px-5 py-3 text-sm font-bold text-zinc-900">{{ alert.rule_name }}</td>
                             <td class="px-5 py-3 font-mono text-xs text-zinc-600">{{ alert.source_ip }}</td>
@@ -312,8 +312,18 @@
     };
 })();
 
+// ──────── Alert state ────────
+// The dashboard is rendered server-side from `alerts`; we also stash
+// the full list in JS so click-to-analyse can pass the dict straight
+// to /api/run instead of doing a second round-trip through GCS.
+window.ALERTS = {{ alerts | tojson }};
+window.ALERTS_BY_ID = Object.fromEntries(
+    (window.ALERTS || []).map(a => [a.id, a])
+);
+
 // ──────── State ────────
 let currentAlertId = null;
+let currentAlert = null;
 let currentResult = null;
 
 // ──────── XSS defense ────────
@@ -375,11 +385,24 @@ function urgencyBadge(u) {
 }
 
 // ──────── Analyze Alert ────────
-async function analyzeAlert(alertId) {
-    currentAlertId = alertId;
+// Row clicks pass an id; we resolve it against window.ALERTS_BY_ID
+// and hand the full dict to analyzeAlert(). Re-runs from the steering
+// box also call analyzeAlertById() with the cached currentAlertId.
+function analyzeAlertById(alertId) {
+    const alert = (window.ALERTS_BY_ID || {})[alertId];
+    if (!alert) {
+        console.error('Unknown alert id:', alertId);
+        return;
+    }
+    return analyzeAlert(alert);
+}
+
+async function analyzeAlert(alert) {
+    currentAlertId = alert.id;
+    currentAlert = alert;
     showView('analysis');
     document.getElementById('breadcrumb').textContent = 'Alerts';
-    document.getElementById('page-title').textContent = alertId + ' Analysis';
+    document.getElementById('page-title').textContent = alert.id + ' Analysis';
     setStatus('Processing...', true);
 
     // Show loading
@@ -387,18 +410,19 @@ async function analyzeAlert(alertId) {
     document.getElementById('enrichment-section').innerHTML = '<div class="loading-pulse text-sm text-zinc-400">Gathering enrichment data...</div>';
     document.getElementById('response-section').innerHTML = '<div class="loading-pulse text-sm text-zinc-400">Generating response plan...</div>';
 
-    // Fetch alert JSON
-    const alertRes = await fetch('/api/alerts/' + alertId);
-    const alert = await alertRes.json();
+    // Use the dict already in JS state — no GCS round-trip.
     document.getElementById('raw-json').textContent = JSON.stringify(alert, null, 2);
 
-    // Run pipeline
+    // Run pipeline. The new contract sends the alert in the body so
+    // the server doesn't have to look it up by id.
     const steering = document.getElementById('steering-input').value.trim();
-    const body = steering ? JSON.stringify({ steering_context: steering }) : '{}';
+    const body = JSON.stringify(
+        steering ? { alert, steering_context: steering } : { alert }
+    );
     const start = performance.now();
 
     try {
-        const res = await fetch('/api/run/' + alertId, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body });
+        const res = await fetch('/api/run', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body });
         currentResult = await res.json();
         const elapsed = ((performance.now() - start) / 1000).toFixed(1);
 
@@ -599,11 +623,15 @@ function rejectAll() {
     const plan = (currentResult.response_plan || {}).response_plan || [];
     plan.forEach((s, i) => { if (s.requires_approval) rejectStep(i); });
 }
-function submitSteering() { if (currentAlertId) analyzeAlert(currentAlertId); }
+function submitSteering() { if (currentAlert) analyzeAlert(currentAlert); }
 async function overrideSeverity() {
     const sev = document.getElementById('override-select').value;
-    if (!sev || !currentAlertId) return;
-    const res = await fetch('/api/override', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ alert_id: currentAlertId, severity: sev }) });
+    if (!sev || !currentAlert) return;
+    const res = await fetch('/api/override', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ alert: currentAlert, severity: sev }),
+    });
     const resp = await res.json();
     if (currentResult) { currentResult.response_plan = resp; renderResponse(currentResult); }
 }
