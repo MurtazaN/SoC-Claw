@@ -75,13 +75,13 @@ SOC-Claw now supports real-time alert ingestion from production SIEM platforms:
 
 For detailed configuration and deployment instructions, see [SETUP.md](SETUP.md).
 
-![Dashboard](assests/dashboard.png)
+![Dashboard](assets/dashboard.png)
 *Dashboard: 30 synthetic SIEM alerts with severity badges, alert feed table, and "Run All 30" benchmark button.*
 
-![Alert Analysis](assests/soc-claw-ui.png)
+![Alert Analysis](assets/soc-claw-ui.png)
 *Alert analysis: Triage & Verification (left), Technical Context with IP reputation, asset intelligence, and MITRE ATT&CK mapping (center), Response Plan with per-step approve/reject actions (right).*
 
-![30 Alert Benchmark](assests/30_alerts.png)
+![30 Alert Benchmark](assets/30_alerts.png)
 *Benchmark — Run All 30: 30 alerts processed in 254.7s. Triage accuracy 76.7%, verified accuracy 63.3%. Per-alert results with ground truth, triage, verified severity, match status, and latency.*
 
 ---

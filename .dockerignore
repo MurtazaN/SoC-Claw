@@ -33,8 +33,7 @@ soc_claw/benchmark/results/*.csv
 *.drawio
 *.drawio.bkp
 architecture.png
-assests/
-main.html
+assets/
 SETUP.md
 initial_plan.md
 
