@@ -30,14 +30,14 @@ providers:
 # Successfull execution with every provider above.
 agents:
   triage:
-    provider: ollama-from-container
-    model: gemma4:e4b
+    provider: lm-studio-from-container
+    model: google/gemma-4-e4b
   verifier:
-    provider: ollama-from-container
-    model: gemma4:e4b
+    provider: lm-studio-from-container
+    model: google/gemma-4-e4b
   response:
-    provider: ollama-from-container
-    model: gemma4:e4b
+    provider: lm-studio-from-container
+    model: google/gemma-4-e4b
     # provider: nvidia-nim
     # model: mistralai/devstral-2-123b-instruct-2512
     # provider: openrouter
