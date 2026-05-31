@@ -24,6 +24,15 @@ All runtime config is env-driven. Copy `.env.example` to `.env` and edit.
 | `VERTEX_API_KEY` | — | Required only when the privacy router routes a prompt to cloud. Bundled alerts never trigger this. |
 | `BLUE_LANTERN_CLOUD_URL` | `https://openrouter.ai/api/v1` | Cloud LLM endpoint. |
 
+## Threat intel (GCS)
+
+| Var | Default | Purpose |
+| --- | --- | --- |
+| `GCS_THREAT_INTEL_BUCKET` | — | Bucket holding the threat-intel dataset blob the `ip_reputation` tool enriches against. Blank → bundled `mock_data/threat_intel.json` (dev/test). |
+| `GCS_THREAT_INTEL_OBJECT` | — | Object name of the dataset blob (single JSON/JSONL/CSV of `ThreatIntelEntry` rows). Required alongside the bucket. Auth via the ADC used by the GCS log reader. |
+| `BLUE_LANTERN_THREAT_INTEL_TTL` | `86400` (24h) | In-memory cache lifetime before the dataset is reloaded from GCS. |
+| `VIRUSTOTAL_API_KEY` | — | **Reserved / not yet wired.** Placeholder for the future per-IP VirusTotal fallback (plan-04B), used only on a dataset miss. No effect today. |
+
 ## Authentication
 
 | Var | Default | Purpose |
