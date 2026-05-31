@@ -118,3 +118,34 @@ class TestExecuteApprovedAction:
         records = [r for r in caplog.records if r.getMessage() == "analyst_action"]
         assert records, "expected an analyst_action audit record"
         assert "(by alice)" in records[0].details
+
+
+# ──────────────────────── escalation tier ────────────────────────
+
+
+class TestEscalationTier:
+    """Escalation tier resolution (replaces the old substring heuristic)."""
+
+    def _escalate(self, action: dict) -> dict:
+        action = {"action_type": "escalate", "reasoning": "x", **action}
+        return pipeline.execute_approved_action(action)
+
+    def test_explicit_tier_wins_over_target_text(self):
+        # target says "Tier 2" but the explicit field says 3 → trust the field.
+        result = self._escalate({"target": "Tier 2 desk", "tier": 3})
+        assert result["escalated_to"] == "Tier 3"
+
+    def test_parses_tier_from_target_when_no_field(self):
+        assert self._escalate({"target": "Tier 3 IR Team"})["escalated_to"] == "Tier 3"
+
+    def test_digit_in_team_name_no_longer_forces_tier3(self):
+        # Old heuristic matched any "3"; "Team-30" must not become Tier 3.
+        assert self._escalate({"target": "Team-30-Analysts"})["escalated_to"] == "Tier 2"
+
+    def test_ir_substring_no_longer_forces_tier3(self):
+        # Old heuristic matched "IR"; "FIRE-team" must not become Tier 3.
+        assert self._escalate({"target": "FIRE-team"})["escalated_to"] == "Tier 2"
+
+    def test_out_of_range_explicit_tier_falls_back(self):
+        # tier=5 is invalid → ignore the field, fall back to target/default.
+        assert self._escalate({"target": "SecOps", "tier": 5})["escalated_to"] == "Tier 2"

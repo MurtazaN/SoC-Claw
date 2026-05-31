@@ -8,6 +8,8 @@ optional default factory → metadata attachment.
 import time
 from typing import NamedTuple
 
+from openai import OpenAIError
+
 from blue_lantern.observability.audit import log_inference, log_routing_decision
 from blue_lantern.llm.client import select_endpoint, guided_json_kwargs
 from blue_lantern.llm.json_extract import extract_json
@@ -19,6 +21,26 @@ class LLMResult(NamedTuple):
     inference_ms: int
     route: str
     raw_content: str
+
+
+async def _create_completion(client, model, messages, gj, agent_name) -> str | None:
+    """Call the chat-completions endpoint, returning the message content.
+
+    Network errors, timeouts, rate limits and non-2xx responses (all
+    ``OpenAIError`` subclasses) are caught and surfaced as ``None`` so the
+    caller treats them like a parse miss and falls back to ``default_factory``
+    instead of letting the whole pipeline crash on a transient outage.
+    """
+    try:
+        response = await client.chat.completions.create(
+            model=model, messages=messages, **gj
+        )
+    except OpenAIError as e:
+        logger.warning(
+            "LLM call failed for %s (%s): %s", agent_name, type(e).__name__, e
+        )
+        return None
+    return response.choices[0].message.content or ""
 
 
 def _parse_llm_output(schema_class, content: str) -> dict | None:
@@ -101,31 +123,31 @@ async def call_llm(
 
         # ── First call ────────────────────────────────────────────
         inference_start = time.perf_counter()
-        response = await client_to_use.chat.completions.create(
-            model=model_name,
-            messages=messages,
-            **gj,
+        content = await _create_completion(
+            client_to_use, model_name, messages, gj, agent_name
         )
         inference_ms = int((time.perf_counter() - inference_start) * 1000)
         log_inference(agent_name, route, inference_ms)
 
-        content = response.choices[0].message.content or ""
-        result = _parse_llm_output(schema_class, content)
+        result = _parse_llm_output(schema_class, content) if content is not None else None
         used_retry = False
         used_default = False
 
         # ── Retry once ────────────────────────────────────────────
         if result is None:
             used_retry = True
-            messages.append({"role": "assistant", "content": content})
+            messages.append({"role": "assistant", "content": content or ""})
             messages.append({"role": "user", "content": retry_hint})
-            response = await client_to_use.chat.completions.create(
-                model=model_name,
-                messages=messages,
-                **gj,
+            content = await _create_completion(
+                client_to_use, model_name, messages, gj, agent_name
             )
-            content = response.choices[0].message.content or ""
-            result = _parse_llm_output(schema_class, content)
+            result = (
+                _parse_llm_output(schema_class, content)
+                if content is not None
+                else None
+            )
+
+        content = content or ""  # both calls may have failed → keep raw_content a str
 
         # ── Default fallback ──────────────────────────────────────
         if result is None:

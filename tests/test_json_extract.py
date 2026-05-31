@@ -54,13 +54,12 @@ class TestFailureModes:
         with pytest.raises(ValueError, match="Could not extract valid JSON"):
             extract_json(text)
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason="greedy `{.*}` spans first-{ to last-}, so two objects + junk "
-        "between them yield invalid JSON and extraction fails. Remove this "
-        "marker once extract_json uses balanced-brace / raw_decode parsing.",
-    )
     def test_two_objects_with_junk_between_recovers_first(self):
-        # Desired (post-fix) behavior: pull the first complete object out.
+        # raw_decode stops after the first complete object, so junk + a second
+        # object after it no longer breaks extraction (finding #5 fix).
         text = 'prefix {"a": 1} junk {"b": 2} suffix'
         assert extract_json(text) == {"a": 1}
+
+    def test_trailing_prose_after_object(self):
+        text = '{"severity": "P1"} \n\nThat is my analysis.'
+        assert extract_json(text) == {"severity": "P1"}

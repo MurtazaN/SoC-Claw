@@ -8,9 +8,24 @@ retry / default-factory paths in ``call_llm``). These tests use the real
 """
 
 import json
+from types import SimpleNamespace
 
-from blue_lantern.llm.caller import _parse_llm_output
+import pytest
+from openai import OpenAIError
+
+from blue_lantern.llm.caller import _create_completion, _parse_llm_output, call_llm
 from blue_lantern.schemas import TriageVerdict
+
+
+class _BoomCompletions:
+    """A chat.completions stub whose create() always raises an SDK error."""
+
+    async def create(self, **kwargs):
+        raise OpenAIError("simulated LLM outage")
+
+
+def _boom_client():
+    return SimpleNamespace(chat=SimpleNamespace(completions=_BoomCompletions()))
 
 _VALID = {
     "severity": "P1",
@@ -74,3 +89,28 @@ class TestParseReturnsNone:
     def test_out_of_range_confidence_returns_none(self):
         bad = {**_VALID, "confidence": 150}
         assert _parse_llm_output(TriageVerdict, json.dumps(bad)) is None
+
+
+class TestApiErrorHandling:
+    """An LLM endpoint outage must degrade to the default, never crash (finding #2)."""
+
+    @pytest.mark.asyncio
+    async def test_create_completion_returns_none_on_openai_error(self):
+        out = await _create_completion(_boom_client(), "m", [], {}, "triage")
+        assert out is None
+
+    @pytest.mark.asyncio
+    async def test_call_llm_falls_back_to_default_on_outage(self):
+        out = await call_llm(
+            agent_name="triage",
+            system_prompt="s",
+            user_content="u",
+            schema_class=TriageVerdict,
+            retry_hint="please output JSON",
+            default_factory=lambda: dict(_VALID, severity="P3", reasoning="fallback"),
+            client=_boom_client(),
+        )
+        # Both the first call and the retry raised → default factory used.
+        assert out.result["severity"] == "P3"
+        assert out.result["reasoning"] == "fallback"
+        assert out.raw_content == ""

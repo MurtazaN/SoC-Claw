@@ -120,3 +120,26 @@ class TestGetCurrentUser:
     def test_bogus_cookie_returns_none(self):
         request = _make_request({auth.SESSION_COOKIE: "not-a-real-session"})
         assert auth.get_current_user(request) is None
+
+
+# ──────────────────────── batch API key ────────────────────────
+
+
+class TestBatchApiKey:
+    """The machine-to-machine key that lets the batch API bypass session auth."""
+
+    def test_no_configured_key_rejects_everything(self, monkeypatch):
+        monkeypatch.delenv("BLUE_LANTERN_BATCH_API_KEY", raising=False)
+        assert auth.verify_batch_api_key("anything") is False
+
+    def test_correct_key_accepts(self, monkeypatch):
+        monkeypatch.setenv("BLUE_LANTERN_BATCH_API_KEY", "s3cret-key")
+        assert auth.verify_batch_api_key("s3cret-key") is True
+
+    def test_wrong_key_rejects(self, monkeypatch):
+        monkeypatch.setenv("BLUE_LANTERN_BATCH_API_KEY", "s3cret-key")
+        assert auth.verify_batch_api_key("not-it") is False
+
+    def test_none_provided_rejects(self, monkeypatch):
+        monkeypatch.setenv("BLUE_LANTERN_BATCH_API_KEY", "s3cret-key")
+        assert auth.verify_batch_api_key(None) is False

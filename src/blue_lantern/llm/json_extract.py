@@ -13,10 +13,29 @@ import re
 logger = logging.getLogger("blue-lantern.llm.json_extract")
 
 
+def _first_json_value(text: str):
+    """Return the first complete JSON object/array embedded in ``text``.
+
+    Scans for an opening ``{`` or ``[`` and uses ``raw_decode``, which parses
+    exactly one value and stops — so trailing prose or a second object
+    (e.g. ``{...} note: {...}``) no longer breaks parsing the way a greedy
+    ``{.*}`` regex did. Returns ``None`` if no parseable value is found.
+    """
+    decoder = json.JSONDecoder()
+    for i, ch in enumerate(text):
+        if ch in "{[":
+            try:
+                value, _ = decoder.raw_decode(text[i:])
+                return value
+            except json.JSONDecodeError:
+                continue
+    return None
+
+
 def extract_json(text: str) -> dict:
     """Robustly extract JSON from LLM response text.
 
-    Handles markdown fences, bare JSON, and regex fallback.
+    Handles markdown fences, bare JSON, and a first-complete-value fallback.
     """
     # Strip markdown code fences
     stripped = re.sub(r"^```(?:json)?\s*\n?", "", text.strip(), flags=re.MULTILINE)
@@ -28,21 +47,10 @@ def extract_json(text: str) -> dict:
     except json.JSONDecodeError:
         pass
 
-    # Try finding first { ... } block (greedy)
-    match = re.search(r"\{.*\}", text, re.DOTALL)
-    if match:
-        try:
-            return json.loads(match.group())
-        except json.JSONDecodeError:
-            pass
-
-    # Try finding first [ ... ] block for arrays
-    match = re.search(r"\[.*\]", text, re.DOTALL)
-    if match:
-        try:
-            return json.loads(match.group())
-        except json.JSONDecodeError:
-            pass
+    # Fallback: pull out the first complete JSON value embedded in the text.
+    value = _first_json_value(stripped)
+    if value is not None:
+        return value
 
     logger.debug("extract_json failed on full text:\n%s", text)
     head = text[:200]

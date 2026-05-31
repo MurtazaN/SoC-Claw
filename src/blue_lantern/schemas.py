@@ -236,6 +236,10 @@ class ResponseStep(BaseModel):
     reasoning: str
     urgency: Literal["immediate", "within_30min", "within_24hrs", "when_convenient"]
     requires_approval: bool
+    # Escalation destination tier (2 or 3). Only meaningful for
+    # ``action_type == "escalate"``; lets the executor route by an explicit
+    # value instead of guessing from the free-text ``target``.
+    tier: int | None = None
 
 
 class ResponsePlan(BaseModel):

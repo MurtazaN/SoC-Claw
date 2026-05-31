@@ -9,6 +9,7 @@ single-process ``uvicorn`` deployments.  For multi-worker / k8s,
 swap ``_sessions`` for a Redis-backed store.
 """
 
+import hmac
 import logging
 import os
 import secrets
@@ -124,6 +125,23 @@ def authenticate(username: str, password: str) -> bool:
     if pw_hash is None:
         return False
     return _verify_password(password, pw_hash)
+
+
+# ──────────────────────── Machine-to-machine API key ────────────────────────
+
+
+def verify_batch_api_key(provided: str | None) -> bool:
+    """Constant-time check of a batch-ingestion API key.
+
+    Automated clients can't hold a browser session, so the batch endpoints
+    accept a shared key in the ``X-API-Key`` header instead. Returns ``False``
+    when ``BLUE_LANTERN_BATCH_API_KEY`` is unset (the batch API is then
+    session-only) or when no key is provided.
+    """
+    expected = os.environ.get("BLUE_LANTERN_BATCH_API_KEY", "")
+    if not expected or not provided:
+        return False
+    return hmac.compare_digest(provided, expected)
 
 
 # ──────────────────────── CLI Helper ────────────────────────

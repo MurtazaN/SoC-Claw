@@ -18,6 +18,10 @@ from blue_lantern.connectors.gcs_reader import download_batch
 logger = logging.getLogger("blue-lantern.server.api")
 router = APIRouter(prefix="/api", tags=["api"])
 
+# Generic message returned to clients on unexpected failures; the full
+# exception is logged server-side, never serialized to the browser (finding #6).
+_INTERNAL_ERROR_MSG = "Internal server error"
+
 
 def _strip_raw_response(result: dict) -> None:
     """Drop the verbose raw LLM text from a result's ``_meta`` before it goes to the client.
@@ -88,9 +92,9 @@ async def api_process_batch(request: Request):
             result = await run_pipeline(alert)
             _strip_pipeline_result(result)
             results.append(result)
-        except Exception as e:
-            logger.error(f"Failed to process alert {alert.get('id')}: {e}")
-            results.append({"error": str(e), "alert_id": alert.get("id")})
+        except Exception:
+            logger.exception("Failed to process alert %s", alert.get("id"))
+            results.append({"error": "Processing failed", "alert_id": alert.get("id")})
 
     return {"results": results, "count": len(results)}
 
@@ -160,9 +164,9 @@ async def api_run(request: Request):
         result = await run_pipeline(alert, steering)
         _strip_pipeline_result(result)
         return result
-    except Exception as e:
+    except Exception:
         logger.exception("api_run failed for %s", alert.get("id", "unknown"))
-        return JSONResponse({"error": str(e)}, status_code=500)
+        return JSONResponse({"error": _INTERNAL_ERROR_MSG}, status_code=500)
 
 
 def _format_sse_event(event: str, data: dict) -> str:
@@ -225,7 +229,7 @@ async def _process_alert_for_stream(alert: dict, sem: asyncio.Semaphore) -> dict
                 "decision": result["verification_result"].get("decision", "unknown"),
                 "latency_ms": result["timing"]["total_ms"],
             }
-        except Exception as e:
+        except Exception:
             logger.exception("run-all failed on %s", alert["id"])
             return {
                 "alert_id": alert["id"],
@@ -235,7 +239,7 @@ async def _process_alert_for_stream(alert: dict, sem: asyncio.Semaphore) -> dict
                 "correct": False,
                 "decision": "error",
                 "latency_ms": 0,
-                "error": str(e),
+                "error": "Processing failed",
             }
 
 
@@ -250,9 +254,9 @@ async def api_approve(request: Request):
     analyst = getattr(request.state, "user", "unknown")
     try:
         return execute_approved_action(action, alert, analyst=analyst)
-    except Exception as e:
+    except Exception:
         logger.exception("api_approve failed (analyst=%s)", analyst)
-        return JSONResponse({"error": str(e)}, status_code=500)
+        return JSONResponse({"error": _INTERNAL_ERROR_MSG}, status_code=500)
 
 
 @router.post("/override")
@@ -299,6 +303,6 @@ async def api_override(request: Request):
         resp = await run_response(alert, final_verdict)
         _strip_raw_response(resp)
         return resp
-    except Exception as e:
+    except Exception:
         logger.exception("api_override failed")
-        return JSONResponse({"error": str(e)}, status_code=500)
+        return JSONResponse({"error": _INTERNAL_ERROR_MSG}, status_code=500)
