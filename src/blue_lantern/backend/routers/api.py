@@ -31,6 +31,13 @@ def _strip_raw_response(result: dict) -> None:
         meta.pop("raw_response", None)
 
 
+def _strip_pipeline_result(result: dict) -> None:
+    """Strip raw LLM text from every agent output in a full ``run_pipeline`` result."""
+    for key in ("triage_result", "verification_result", "response_plan"):
+        if isinstance(result.get(key), dict):
+            _strip_raw_response(result[key])
+
+
 @router.get("/alerts")
 async def api_alerts(request: Request):
     """Get most recent alerts from GCS."""
@@ -79,6 +86,7 @@ async def api_process_batch(request: Request):
     for alert in alerts:
         try:
             result = await run_pipeline(alert)
+            _strip_pipeline_result(result)
             results.append(result)
         except Exception as e:
             logger.error(f"Failed to process alert {alert.get('id')}: {e}")
@@ -150,9 +158,7 @@ async def api_run(request: Request):
 
     try:
         result = await run_pipeline(alert, steering)
-        for key in ("triage_result", "verification_result", "response_plan"):
-            if isinstance(result.get(key), dict):
-                _strip_raw_response(result[key])
+        _strip_pipeline_result(result)
         return result
     except Exception as e:
         logger.exception("api_run failed for %s", alert.get("id", "unknown"))
