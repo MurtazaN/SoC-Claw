@@ -11,6 +11,12 @@ __pycache__/
 .venv/
 venv/
 
+# Test / coverage artifacts (coverage runs on demand, never committed)
+.coverage
+.coverage.*
+htmlcov/
+.pytest_cache/
+
 # Build / packaging
 build/
 dist/
