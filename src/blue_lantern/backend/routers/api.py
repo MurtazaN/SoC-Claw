@@ -19,6 +19,18 @@ logger = logging.getLogger("blue-lantern.server.api")
 router = APIRouter(prefix="/api", tags=["api"])
 
 
+def _strip_raw_response(result: dict) -> None:
+    """Drop the verbose raw LLM text from a result's ``_meta`` before it goes to the client.
+
+    The raw model output is retained server-side (tracing / audit) but must not be
+    serialized to the browser. Other ``_meta`` fields — ``route``, ``inference_ms``,
+    and ``tool_calls`` (read by the dashboard) — are kept.
+    """
+    meta = result.get("_meta")
+    if isinstance(meta, dict):
+        meta.pop("raw_response", None)
+
+
 @router.get("/alerts")
 async def api_alerts(request: Request):
     """Get most recent alerts from GCS."""
@@ -139,8 +151,8 @@ async def api_run(request: Request):
     try:
         result = await run_pipeline(alert, steering)
         for key in ("triage_result", "verification_result", "response_plan"):
-            if result.get(key) and isinstance(result[key], dict):
-                result[key].pop("_raw_response", None)
+            if isinstance(result.get(key), dict):
+                _strip_raw_response(result[key])
         return result
     except Exception as e:
         logger.exception("api_run failed for %s", alert.get("id", "unknown"))
@@ -279,7 +291,7 @@ async def api_override(request: Request):
     }
     try:
         resp = await run_response(alert, final_verdict)
-        resp.pop("_raw_response", None)
+        _strip_raw_response(resp)
         return resp
     except Exception as e:
         logger.exception("api_override failed")
