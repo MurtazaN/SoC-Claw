@@ -40,6 +40,7 @@ from blue_lantern.backend.auth import (  # noqa: E402  (after observability boot
     create_session,
     destroy_session,
     get_current_user,
+    verify_batch_api_key,
 )
 from blue_lantern.backend.routers import api_router, auth_router, pages_router
 from blue_lantern.backend.routes.siem_webhook import router as siem_webhook_router
@@ -58,14 +59,22 @@ app.state.env = {
 
 # ──────────────────────── CSRF Middleware (S3) ────────────────────────
 # starlette-csrf sets a ``csrftoken`` cookie and requires a matching
-# ``x-csrftoken`` header on POST/PUT/DELETE.  The login endpoint is
-# exempt because there is no session to protect before auth.
+# ``x-csrftoken`` header on POST/PUT/DELETE.  Exemptions:
+#   - login/logout: no session to protect before auth.
+#   - /api/siem/*, /api/batch/*: machine-to-machine ingress authenticated by
+#     HMAC signature / API key, not by a browser cookie. External callers
+#     can't carry a CSRF token, so CSRF must not gate these (see auth_middleware).
 app.add_middleware(
     CSRFMiddleware,
     secret=SECRET_KEY,
     cookie_name="csrftoken",
     cookie_samesite="lax",
-    exempt_urls=[re.compile(r"^/login/?$"), re.compile(r"^/logout/?$")],
+    exempt_urls=[
+        re.compile(r"^/login/?$"),
+        re.compile(r"^/logout/?$"),
+        re.compile(r"^/api/siem/.*$"),
+        re.compile(r"^/api/batch/.*$"),
+    ],
 )
 
 STATIC_DIR = Path(__file__).parent.parent / "frontend" / "static"
@@ -77,6 +86,11 @@ app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 # Paths that don't require authentication
 _PUBLIC_PATHS = {"/login", "/login/", "/logout", "/logout/"}
 _PUBLIC_PREFIXES = ("/static/",)
+
+# Ingress endpoints that authenticate themselves inside the handler via an
+# HMAC signature (SIEM webhook), so the session-cookie check must not block
+# them — external SIEMs have no browser session.
+_SELF_AUTH_PREFIXES = ("/api/siem/",)
 
 
 @app.middleware("http")
@@ -97,6 +111,19 @@ async def auth_middleware(request: Request, call_next):
     """
     path = request.url.path
     if path in _PUBLIC_PATHS or path.startswith(_PUBLIC_PREFIXES):
+        return await call_next(request)
+
+    # SIEM webhook verifies an HMAC signature in its own handler.
+    if path.startswith(_SELF_AUTH_PREFIXES):
+        return await call_next(request)
+
+    # Batch ingestion is machine-to-machine: a valid X-API-Key is an
+    # alternative to a session cookie. (When no key is configured this is a
+    # no-op and the endpoint falls back to the session check below.)
+    if path.startswith("/api/batch/") and verify_batch_api_key(
+        request.headers.get("X-API-Key")
+    ):
+        request.state.user = "batch-api"
         return await call_next(request)
 
     user = get_current_user(request)

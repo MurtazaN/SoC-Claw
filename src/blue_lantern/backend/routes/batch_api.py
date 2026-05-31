@@ -2,6 +2,7 @@
 
 import json
 import logging
+import os
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -18,6 +19,12 @@ from blue_lantern.schemas import Alert
 logger = logging.getLogger("blue-lantern.connectors.batch_api")
 
 router = APIRouter(prefix="/api/batch", tags=["batch"])
+
+# Cap the in-memory size of an uploaded batch file to avoid memory-exhaustion
+# DoS. Override via BLUE_LANTERN_MAX_UPLOAD_BYTES; defaults to 50 MB.
+MAX_UPLOAD_BYTES = int(
+    os.environ.get("BLUE_LANTERN_MAX_UPLOAD_BYTES", str(50 * 1024 * 1024))
+)
 
 # Mapper registry
 MAPPERS = {
@@ -89,14 +96,25 @@ async def upload_batch(file: UploadFile):
             detail="File must be a JSONL file (.jsonl extension)",
         )
 
-    # Read and parse file
+    # Read the file with a hard byte cap (reads at most MAX_UPLOAD_BYTES + 1)
+    # so an oversized upload can't exhaust server memory (finding #7).
     try:
-        content = await file.read()
+        content = await file.read(MAX_UPLOAD_BYTES + 1)
+    except Exception:
+        logger.exception("Failed to read uploaded batch file")
+        raise HTTPException(status_code=400, detail="Failed to read uploaded file")
+
+    if len(content) > MAX_UPLOAD_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"File exceeds the {MAX_UPLOAD_BYTES} byte upload limit",
+        )
+
+    try:
         lines = content.decode("utf-8").strip().split("\n")
         lines = [line.strip() for line in lines if line.strip()]
-    except Exception as e:
-        logger.error(f"Failed to read file: {e}")
-        raise HTTPException(status_code=400, detail=f"Failed to read file: {e}")
+    except UnicodeDecodeError:
+        raise HTTPException(status_code=400, detail="File is not valid UTF-8 text")
 
     if not lines:
         raise HTTPException(status_code=400, detail="File is empty")
@@ -276,9 +294,6 @@ async def get_job_results(job_id: str):
     try:
         results = await download_results(results_location)
         return results
-    except Exception as e:
-        logger.error(f"Failed to download results for job {job_id}: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to download results: {e}",
-        )
+    except Exception:
+        logger.exception("Failed to download results for job %s", job_id)
+        raise HTTPException(status_code=500, detail="Failed to download results")

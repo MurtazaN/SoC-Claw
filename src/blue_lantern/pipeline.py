@@ -28,6 +28,7 @@ import ipaddress
 import json
 import logging
 import os
+import re
 import time
 from pathlib import Path
 
@@ -197,11 +198,26 @@ def _handle_create_ticket(action, alert, **kwargs):
     return response_tools.create_ticket(summary, priority)
 
 
+def _escalation_tier(action: dict) -> int:
+    """Resolve the escalation tier for an escalate action.
+
+    Prefers an explicit integer ``tier`` (2 or 3) on the action; otherwise
+    parses a ``Tier N`` out of the free-text ``target``. Falls back to Tier 2.
+    This replaces the old substring check (``"3" in target or "IR" in target``)
+    that mis-routed labels like ``Team-30`` or ``FIRE-team`` to Tier 3.
+    """
+    explicit = action.get("tier")
+    if isinstance(explicit, int) and explicit in (2, 3):
+        return explicit
+    match = re.search(r"tier\s*([23])", str(action.get("target", "")), re.IGNORECASE)
+    if match:
+        return int(match.group(1))
+    return 2
+
+
 def _handle_escalate(action, alert, **kwargs):
-    target = action.get("target", "")
     reasoning = action.get("reasoning", "")
-    tier = 3 if "3" in str(target) or "IR" in str(target) else 2
-    return response_tools.escalate(tier, reasoning)
+    return response_tools.escalate(_escalation_tier(action), reasoning)
 
 
 _ACTION_DISPATCH = {

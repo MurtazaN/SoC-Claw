@@ -69,7 +69,8 @@ OUTPUT exactly this JSON:
       "target": "<hostname, IP, or system affected>",
       "reasoning": "<1 sentence: why this action is necessary>",
       "urgency": "immediate|within_30min|within_24hrs|when_convenient",
-      "requires_approval": true|false
+      "requires_approval": true|false,
+      "tier": <2 or 3, ONLY for escalate actions; omit otherwise>
     }
   ],
   "incident_summary": "<2-3 sentence summary suitable for handoff to next shift or management briefing>",
@@ -142,14 +143,14 @@ def _default_plan(alert: dict, severity: str, verdict: dict) -> dict:
         plan = [
             {"step": 1, "action": f"Isolate host {hostname}", "action_type": "isolate_host", "target": hostname, "reasoning": "Containment required for P1 incident", "urgency": "immediate", "requires_approval": True},
             {"step": 2, "action": "Block identified IOCs", "action_type": "block_ioc", "target": alert.get("dest_ip", "unknown"), "reasoning": "Cut off malicious communication", "urgency": "immediate", "requires_approval": True},
-            {"step": 3, "action": "Escalate to Tier 3", "action_type": "escalate", "target": "Tier 3 IR Team", "reasoning": "P1 requires senior investigation", "urgency": "immediate", "requires_approval": True},
+            {"step": 3, "action": "Escalate to Tier 3", "action_type": "escalate", "target": "Tier 3 IR Team", "tier": 3, "reasoning": "P1 requires senior investigation", "urgency": "immediate", "requires_approval": True},
             {"step": 4, "action": "Create critical incident ticket", "action_type": "create_ticket", "target": "ITSM", "reasoning": "Audit trail and documentation", "urgency": "immediate", "requires_approval": False},
         ]
     elif severity == "P2":
         plan = [
             {"step": 1, "action": "Block identified IOCs", "action_type": "block_ioc", "target": alert.get("dest_ip", "unknown"), "reasoning": "Reduce exposure during investigation", "urgency": "within_30min", "requires_approval": True},
             {"step": 2, "action": "Create high-priority ticket", "action_type": "create_ticket", "target": "ITSM", "reasoning": "Assign for investigation", "urgency": "within_30min", "requires_approval": False},
-            {"step": 3, "action": "Escalate to Tier 2", "action_type": "escalate", "target": "Tier 2", "reasoning": "Needs skilled analysis", "urgency": "within_30min", "requires_approval": True},
+            {"step": 3, "action": "Escalate to Tier 2", "action_type": "escalate", "target": "Tier 2", "tier": 2, "reasoning": "Needs skilled analysis", "urgency": "within_30min", "requires_approval": True},
         ]
     elif severity == "P3":
         plan = [
