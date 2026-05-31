@@ -14,8 +14,8 @@ This guide will help you get Blue Lantern running in different environments.
 
 ```bash
 # Clone the repository
-git clone <repository-url>
-cd Blue Lantern
+git clone https://github.com/MurtazaN/SoC-Claw.git
+cd SoC-Claw
 
 # Copy environment file
 cp .env.example .env
@@ -70,7 +70,7 @@ The app will automatically connect to vLLM at `http://localhost:8000/v1`.
 
 ### Step 1: Configure Environment Variables
 
-Create a production `.env` file with the following values:
+Create a production `.env` file with at least the following values. These are the production-critical variables; see [`.env.example`](.env.example) for the full annotated list (~30 variables, including observability, rate limiting, and per-agent model selection).
 
 ```bash
 # --- Authentication ---
@@ -81,6 +81,11 @@ BLUE_LANTERN_SECRET_KEY=<generate-with: python -c "import secrets; print(secrets
 BLUE_LANTERN_USERS=alice:$2b$12$<hash>,bob:$2b$12$<hash>
 # Generate hashes with: python -m blue_lantern.backend.auth <password>
 
+# --- Redis ---
+# Required in production: backs batch-job tracking and Guard rate-limit state.
+# Without it, the /api/batch/* endpoints return 503.
+BLUE_LANTERN_REDIS_URL=redis://redis:6379/0
+
 # --- Kafka ---
 # Your Kafka broker addresses
 KAFKA_BOOTSTRAP_SERVERS=kafka-1:9092,kafka-2:9092,kafka-3:9092
@@ -89,8 +94,11 @@ KAFKA_BOOTSTRAP_SERVERS=kafka-1:9092,kafka-2:9092,kafka-3:9092
 # Your GCP project ID
 GCP_PROJECT_ID=your-project-id
 
-# Your GCP bucket name (create this first)
+# Your GCP bucket name for results (create this first)
 GCP_BUCKET_NAME=blue-lantern-results
+
+# GCS bucket the app reads SIEM logs from (source of alerts)
+GCS_LOG_BUCKET_NAME=blue-lantern-siem-logs
 
 # Service account key file path
 GOOGLE_APPLICATION_CREDENTIALS=/path/to/service-account-key.json
@@ -272,14 +280,8 @@ kubectl apply -f k8s/
 ### Check Service Health
 
 ```bash
-# Check app health
-curl http://localhost:7860/api/health
-
-# Check webhook health
+# Check webhook health (the only health endpoint)
 curl http://localhost:7860/api/siem/health
-
-# Check batch API health
-curl http://localhost:7860/api/batch/health
 ```
 
 ### Check Kafka Topics

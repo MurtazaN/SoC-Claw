@@ -105,7 +105,7 @@ SoC-Claw/                                    # repo root (rename pending)
         ├── cache.py                     # in-memory + Redis caches
         ├── schemas.py                   # Pydantic schema validation
         ├── observability/               # audit, telemetry, logging_config
-        ├── config/                      # routing.py + routing.yaml + privacy_routes.yaml
+        ├── config/                      # routing.py + routing.yaml
         ├── llm/                         # provider-agnostic LLM client + caller
         ├── agents/                      # triage, verifier, response
         ├── tools/                       # ip_reputation, mitre_lookup, asset_lookup, response_tools
@@ -151,8 +151,8 @@ All data is cross-referenced: every alert hostname exists in asset inventory, ev
 
 ```bash
 # 1. Clone Blue Lantern Repository
-git clone https://github.com/MurtazaN/Blue Lantern
-cd Blue Lantern
+git clone https://github.com/MurtazaN/SoC-Claw.git
+cd SoC-Claw
 
 # 2. Setup Environment Variables
 cp .env.example .env

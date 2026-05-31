@@ -47,21 +47,27 @@ The previous review was actioned. These are confirmed fixed and should **not** b
 | CV1 | `_`-prefixed metadata keys | Consolidated into a nested `_meta` dict (`caller.py:140`). *(Partial — see DRY2 / T1-2 below.)* |
 | D2 | `call_llm()` created its own client | Now accepts an optional `client` parameter (`caller.py:47`). |
 
+**Closed during this review (2026-05-31):**
+
+| Ref | Finding | Resolution |
+|-----|---------|------------|
+| S1 | Dead duplicate routing module | Deleted `config/routing.py` + its `utils.py` re-exports. `config/routing.yaml` (the active config) is unaffected. |
+| C1 | Raw LLM output leaked to the client | Added `_strip_raw_response()` + `_strip_pipeline_result()` in `api.py`; applied to `/run`, `/override`, **and** `/process-batch`. Strips only `_meta.raw_response`, so the dashboard's `_meta.tool_calls` survives (DRY2's "strip all of `_meta`" was deliberately *not* adopted — it would break `index.html:502`). |
+
 ---
 
 ## 📊 SOLID Scorecard
 
 | Principle | Grade | Summary |
 |-----------|-------|---------|
-| **S** — Single Responsibility | **A−** | Clean module split achieved. Blemishes: a dead *duplicate* routing module; a few long files (`harness.py` 371, `api.py` 286). |
+| **S** — Single Responsibility | **A** | Clean module split; the dead duplicate routing module was removed (2026-05-31). Remaining: a few long files (`harness.py` 371, `api.py` ~300). |
 | **O** — Open/Closed | **A−** | Tool registry + action dispatch dict in place. Only the 3-stage pipeline order is still hardcoded (low priority). |
 | **L** — Liskov Substitution | **A** | `Cache` Protocol and `SIEMMapper` ABC implementations are cleanly substitutable. |
 | **I** — Interface Segregation | **A−** | `LLMResult` typed return done. Agents still pass untyped `dict` across stage boundaries. |
 | **D** — Dependency Inversion | **B** | `Cache` Protocol + injectable `call_llm(client=)` are good. Weak: module-global singletons (kafka/auth) and in-memory session store. |
 
-**Overall: B+ / A−** — a strong, maturing codebase. The remaining items are smaller than the
-prior round; the highest value is removing stale/dead code (T1) and closing the type-checking +
-test gaps (T3).
+**Overall: A−** — a strong, maturing codebase. Both 🟠 items (dead code S1, raw-output leak C1)
+are now closed; the remaining highest value is closing the type-checking + test gaps (C4 / tests).
 
 ---
 
@@ -72,7 +78,11 @@ test gaps (T3).
 Module boundaries are clean: each agent, tool, schema, connector, and infra module owns one
 concern. Two structural smells remain:
 
-#### S1 🟠 Dead **duplicate** routing module
+#### S1 ✅ Dead **duplicate** routing module — *resolved 2026-05-31*
+
+> **Resolved.** `config/routing.py` and its `utils.py` re-exports were deleted; no live callers
+> existed. `config/routing.yaml` (the active config read by `llm/client.py`) is untouched.
+> Original finding kept below for context.
 
 There are two routing concepts, and one is a phantom:
 
@@ -156,7 +166,12 @@ Protocol with in-memory and Redis implementations (mirroring the existing `Cache
 
 ### Stale logic / leaks
 
-#### C1 🟠 Raw LLM output leaks to the client (dead cleanup after the `_meta` refactor)
+#### C1 ✅ Raw LLM output leaks to the client (dead cleanup after the `_meta` refactor) — *resolved 2026-05-31*
+
+> **Resolved.** Added `_strip_raw_response()` + `_strip_pipeline_result()` in `api.py` and applied
+> them to `/run`, `/override`, **and** `/process-batch` (the last was the same leak class, unfiled).
+> Only `_meta.raw_response` is removed — `_meta.tool_calls` (read by `index.html:502`) is preserved,
+> so DRY2's "strip all of `_meta`" was deliberately not adopted. Original finding kept below for context.
 
 `call_llm()` now nests the raw model text at `_meta.raw_response` (`llm/caller.py:140-144`).
 But the API still tries to strip a **top-level** `_raw_response` that no longer exists:
@@ -289,8 +304,8 @@ Effort: **S** < 30 min · **M** 30–90 min · **L** half-day+.
 
 | # | Sev | Effort | Ref | Action |
 |---|-----|--------|-----|--------|
-| 1 | 🟠 | S | C1 | Fix the `_raw_response` leak — strip `_meta` properly before returning from `/run` and `/override`. |
-| 2 | 🟠 | S | S1 | Delete dead `config/routing.py` + its `utils.py` re-exports (verify no callers first). |
+| ~~1~~ | ✅ | S | C1 | **Done 2026-05-31** — `_strip_raw_response()`/`_strip_pipeline_result()` strip `_meta.raw_response` in `/run`, `/override`, and `/process-batch`. |
+| ~~2~~ | ✅ | S | S1 | **Done 2026-05-31** — deleted dead `config/routing.py` + its `utils.py` re-exports. |
 | 3 | 🟡 | S | C3 | Correct `steering_context: str = None` → `str | None` (4 sites). |
 | 4 | 🟡 | S | DRY2 | Add one `strip_internal()` helper; replace the 3 stripping idioms. |
 | 5 | 🟡 | S | DRY1 | Extract `build_user_prompt()` (or fold into `call_llm`). |

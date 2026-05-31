@@ -4,7 +4,6 @@ After the SRP refactor (see docs/CLEAN_CODE_SOLID_REVIEW.md, S1), the
 functionality that lived here has been split into focused modules:
 
 - ``blue_lantern.llm``       — LLM client, call scaffold, JSON extraction
-- ``blue_lantern.config.routing``   — privacy-aware inference routing
 - ``blue_lantern.observability.audit``     — structured audit logging helpers
 
 This file re-exports every public name so existing ``from blue_lantern.utils
@@ -19,12 +18,6 @@ from blue_lantern.llm.client import (  # noqa: F401
     guided_json_kwargs,
 )
 from blue_lantern.llm.caller import call_llm  # noqa: F401
-
-# ── Re-exports from blue_lantern.config.routing ──────────────────────────────
-from blue_lantern.config.routing import (  # noqa: F401
-    load_privacy_routes,
-    route_request,
-)
 
 # ── Re-exports from blue_lantern.observability.audit ────────────────────────────────
 from blue_lantern.observability.audit import (  # noqa: F401
