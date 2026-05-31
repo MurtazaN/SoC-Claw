@@ -39,6 +39,7 @@ dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
     "freezegun>=1.4",
+    "pytest-cov>=5",
 ]
 
 [build-system]
@@ -48,6 +49,14 @@ build-backend = "hatchling.build"
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 testpaths = ["tests"]
+# Coverage is intentionally NOT wired into addopts — it does not run on a plain
+# `pytest`. Measure it on demand: `pytest --cov=blue_lantern --cov-report=term-missing`.
+
+[tool.coverage.run]
+source = ["blue_lantern"]
+
+[tool.coverage.report]
+show_missing = true
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/blue_lantern"]
